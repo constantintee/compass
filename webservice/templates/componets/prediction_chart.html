@@ -1,0 +1,40 @@
+<!-- templates/components/prediction_card.html -->
+<div class="bg-white rounded-lg shadow-md p-6">
+    <div class="flex justify-between items-start mb-4">
+        <div>
+            <h3 class="text-2xl font-bold">{{ prediction.ticker }}</h3>
+            <p class="text-sm text-gray-600">Last updated: {{ prediction.prediction_date|date:"F j, Y, g:i a" }}</p>
+        </div>
+        <button
+            class="text-gray-600 hover:text-gray-800"
+            hx-post="/predict/{{ prediction.ticker }}/refresh/"
+            hx-target="#prediction-{{ prediction.ticker }}"
+        >
+            ↻ Refresh
+        </button>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4 mb-4">
+        <div>
+            <p class="text-sm text-gray-600">Current Price</p>
+            <p class="text-2xl font-bold">${{ prediction.current_price|floatformat:2 }}</p>
+        </div>
+        <div>
+            <p class="text-sm text-gray-600">Predicted Price</p>
+            <p class="text-2xl font-bold">${{ prediction.predicted_price|floatformat:2 }}</p>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-4">
+        <div>
+            <p class="text-sm text-gray-600">Change</p>
+            <p class="text-xl font-bold {% if prediction.price_change > 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                {{ prediction.price_change_percent|floatformat:2 }}%
+            </p>
+        </div>
+        <div>
+            <p class="text-sm text-gray-600">Confidence</p>
+            <p class="text-xl font-bold">{{ prediction.confidence_score|floatformat:1 }}%</p>
+        </div>
+    </div>
+</div>

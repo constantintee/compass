@@ -1,0 +1,16 @@
+<!-- templates/widgets/confidence_meter.html -->
+<div class="bg-white rounded-lg shadow-md p-4">
+    <p class="text-sm text-gray-600 mb-1">Prediction Confidence</p>
+    <div class="relative pt-1">
+        <div class="overflow-hidden h-2 text-xs flex rounded bg-gray-200">
+            <div
+                style="width: {{ confidence }}%"
+                class="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center
+                       {% if confidence >= 80 %}bg-green-500
+                       {% elif confidence >= 60 %}bg-yellow-500
+                       {% else %}bg-red-500{% endif %}"
+            ></div>
+        </div>
+        <p class="text-right mt-1 text-sm font-bold">{{ confidence }}%</p>
+    </div>
+</div>

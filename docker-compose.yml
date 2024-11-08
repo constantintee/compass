@@ -1,0 +1,86 @@
+version: '3.8'
+
+x-develop:
+  restart: any  # Restart on any file changes
+  watch:
+    paths:
+      - .  # Watch the entire project directory for changes
+
+services:
+  downloader:
+    build: ./downloader
+    container_name: compass_downloader
+    volumes:
+      - ./downloader:/app
+      - ./training:/app/training
+      - ./data:/app/data
+    restart: always
+    command: ["python", "/app/downloader.py"]
+    environment:
+      - PYTHONPATH=/app:/app/training
+    env_file: .env
+    x-develop:
+      watch:
+        paths:
+          - ./downloader  # Watch the downloader directory for changes
+
+  training:
+    build: ./training
+    container_name: compass_training
+    volumes:
+      - /home/ct/stock-analyzer-v1/training:/usr/src/app
+      - /home/ct/stock-analyzer-v1/data:/usr/src/app/data
+
+    restart: none
+    command: python training.py
+    env_file: .env
+    x-develop:
+      watch:
+        paths:
+          - ./training
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+  web:
+    build: 
+      context: .
+      dockerfile: webservice/Dockerfile
+    container_name: compass_webservice
+    command: >
+      bash -c "cd webservice && python manage.py runserver 0.0.0.0:5000"
+    volumes:
+      - .:/app
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    networks:
+      - stock_net
+    environment:
+      - PYTHONPATH=/app:/app/webservice:/app/training
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    working_dir: /app/webservice
+    x-develop:
+      watch:
+        paths:
+        - ./webservice
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+networks:
+  stock_net:
+    driver: bridge

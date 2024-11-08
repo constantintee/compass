@@ -1,0 +1,21 @@
+<!-- templates/components/market_stats.html -->
+<div class="space-y-4">
+    <div class="grid grid-cols-2 gap-4">
+        <div>
+            <p class="text-sm text-gray-600">Volume</p>
+            <p class="text-lg font-bold">{{ stats.volume|intcomma }}</p>
+        </div>
+        <div>
+            <p class="text-sm text-gray-600">52 Week High</p>
+            <p class="text-lg font-bold">${{ stats.year_high|floatformat:2 }}</p>
+        </div>
+        <div>
+            <p class="text-sm text-gray-600">52 Week Low</p>
+            <p class="text-lg font-bold">${{ stats.year_low|floatformat:2 }}</p>
+        </div>
+        <div>
+            <p class="text-sm text-gray-600">Market Cap</p>
+            <p class="text-lg font-bold">${{ stats.market_cap|intword }}</p>
+        </div>
+    </div>
+</div>

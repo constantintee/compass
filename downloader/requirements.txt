@@ -1,0 +1,18 @@
+yfinance==0.1.87
+#pandas==1.5.2
+#numpy==1.23.5
+requests==2.26.0
+PyYAML==6.0
+tqdm==4.64.1
+APScheduler==3.9.1
+psycopg2-binary==2.9.7
+timescale
+python-dotenv==1.0.0
+# preprocessor
+scipy>=1.7.0,<1.11.0
+talipp==2.4.0
+numpy==1.24.3
+pandas==1.5.3
+scikit-learn==1.2.2
+tensorflow==2.13.0
+h5py==3.8.0

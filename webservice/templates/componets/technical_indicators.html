@@ -1,0 +1,12 @@
+<!-- templates/components/technical_indicators.html -->
+<div class="space-y-4">
+    {% for indicator in indicators %}
+    <div class="border-b pb-4 last:border-0">
+        <p class="text-sm text-gray-600">{{ indicator.name }}</p>
+        <p class="text-lg font-bold">{{ indicator.value }}</p>
+        <p class="text-sm {% if indicator.signal == 'buy' %}text-green-600{% elif indicator.signal == 'sell' %}text-red-600{% else %}text-gray-600{% endif %}">
+            {{ indicator.signal|title }} Signal
+        </p>
+    </div>
+    {% endfor %}
+</div>

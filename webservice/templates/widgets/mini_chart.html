@@ -1,0 +1,14 @@
+<!-- templates/widgets/mini_chart.html -->
+<div class="bg-white rounded-lg shadow-md p-4">
+    <div class="h-24" id="mini-chart-{{ ticker }}"></div>
+    <script>
+        const data = {{ chart_data|safe }};
+        const layout = {
+            margin: { t: 0, r: 0, l: 0, b: 0 },
+            showlegend: false,
+            plot_bgcolor: 'transparent',
+            paper_bgcolor: 'transparent'
+        };
+        Plotly.newPlot('mini-chart-{{ ticker }}', data, layout);
+    </script>
+</div>

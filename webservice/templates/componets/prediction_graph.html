@@ -1,0 +1,10 @@
+<!-- templates/components/prediction_graph.html -->
+<div class="bg-white rounded-lg shadow-md p-6">
+    <div id="graph-{{ ticker }}" class="h-96"></div>
+    <script>
+        document.addEventListener('htmx:afterSettle', function() {
+            const graphData = {{ graph_data|safe }};
+            Plotly.newPlot('graph-{{ ticker }}', graphData.data, graphData.layout);
+        });
+    </script>
+</div>

@@ -1,0 +1,48 @@
+<!-- templates/base.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Stock Predictor{% endblock %}</title>
+    
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    
+    <!-- Plotly for charts -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom styles -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Header -->
+    <header class="bg-gray-800 text-white">
+        <nav class="container mx-auto px-4 py-4">
+            <div class="flex justify-between items-center">
+                <a href="/" class="text-xl font-bold">Stock Predictor</a>
+                <div class="space-x-4">
+                    <a href="/" class="hover:text-gray-300">Home</a>
+                    <a href="/stocks/top" class="hover:text-gray-300">Top Stocks</a>
+                    <a href="/predictions" class="hover:text-gray-300">My Predictions</a>
+                </div>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Main content -->
+    <main class="container mx-auto px-4 py-8">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-800 text-white mt-auto">
+        <div class="container mx-auto px-4 py-4">
+            <p class="text-center text-sm">Stock Predictor &copy; {% now "Y" %}</p>
+        </div>
+    </footer>
+</body>
+</html>

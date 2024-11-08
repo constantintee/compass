@@ -1,0 +1,13 @@
+<!-- templates/layouts/two_column.html -->
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <div class="lg:col-span-2">
+        {% block main_content %}{% endblock %}
+    </div>
+    <div class="lg:col-span-1">
+        {% block sidebar_content %}{% endblock %}
+    </div>
+</div>
+{% endblock %}

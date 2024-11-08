@@ -1,0 +1,7 @@
+[] Directory creation for all functions, that need to store data
+[] Webservice + Backend (Django and htmx)
+[] Store indicator-data in the database as well
+[] fix the complete training and preprocessor pipeline
+[] comment everything and clean up
+[] Graphs for training history date, so its not overwriting
+[] 

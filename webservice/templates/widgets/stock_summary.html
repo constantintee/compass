@@ -1,0 +1,15 @@
+<!-- templates/widgets/stock_summary.html -->
+<div class="bg-white rounded-lg shadow-md p-4">
+    <div class="flex justify-between items-center mb-2">
+        <div>
+            <h4 class="font-bold">{{ stock.ticker }}</h4>
+            <p class="text-sm text-gray-600">{{ stock.company_name }}</p>
+        </div>
+        <div class="text-right">
+            <p class="font-bold">${{ stock.current_price|floatformat:2 }}</p>
+            <p class="text-sm {% if stock.price_change > 0 %}text-green-600{% else %}text-red-600{% endif %}">
+                {{ stock.price_change_percent|floatformat:2 }}%
+            </p>
+        </div>
+    </div>
+</div>

@@ -1,0 +1,56 @@
+<!-- templates/predictions.html -->
+{% extends 'layouts/two_column.html' %}
+
+{% block main_content %}
+<div class="bg-white rounded-lg shadow-md p-6">
+    <h2 class="text-2xl font-bold mb-6">Prediction Details</h2>
+    
+    <div class="space-y-6">
+        <!-- Stock Info -->
+        <div class="flex justify-between items-start">
+            <div>
+                <h3 class="text-3xl font-bold">{{ ticker }}</h3>
+                <p class="text-gray-600">{{ company_name }}</p>
+            </div>
+            <button
+                class="bg-gray-100 hover:bg-gray-200 px-4 py-2 rounded-lg"
+                hx-post="/predict/{{ ticker }}/refresh"
+                hx-target="#prediction-details"
+            >
+                Refresh
+            </button>
+        </div>
+
+        <!-- Prediction Graph -->
+        <div id="prediction-graph" class="h-96">
+            {% include 'components/prediction_graph.html' %}
+        </div>
+
+        <!-- Prediction Details -->
+        <div id="prediction-details">
+            {% include 'components/prediction_details.html' %}
+        </div>
+
+        <!-- Historical Predictions -->
+        <div id="prediction-history">
+            {% include 'components/prediction_history.html' %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block sidebar_content %}
+<div class="space-y-6">
+    <!-- Technical Indicators -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h3 class="text-xl font-bold mb-4">Technical Indicators</h3>
+        {% include 'components/technical_indicators.html' %}
+    </div>
+
+    <!-- Market Stats -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h3 class="text-xl font-bold mb-4">Market Statistics</h3>
+        {% include 'components/market_stats.html' %}
+    </div>
+</div>
+{% endblock %}

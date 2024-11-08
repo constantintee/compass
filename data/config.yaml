@@ -1,0 +1,273 @@
+databasepsql:
+  type: "postgresql"
+  host: ""
+  port: 
+  user: ""
+  password: ""
+  dbname: ""
+
+downloader:
+  download_interval_minutes: 60
+  max_retries: 5
+  backoff_factor: 2
+  retry_initial_delay_seconds: 2
+  thread_pool_size: 5
+  fetching:
+    source_priority:
+      - "yfinance"
+      - "stooq"
+  logging:
+    enabled: true
+    log_file: "data/logs/data_download.log"
+    max_bytes: 5242880  # 5MB
+    backup_count: 5
+    level: DEBUG
+
+training_logging:
+  enabled: true
+  file: "data/logs/training.log"
+  max_bytes: 5242880  # 5MB
+  backup_count: 5
+  environment: "development"  # or "production"
+
+main_logging:
+  enabled: true
+  file: "data/logs/main.log"
+  max_bytes: 5242880  # 5MB
+  backup_count: 5
+
+webservice_logging:
+  enabled: true
+  file: "data/logs/webservice.log"
+  max_bytes: 5242880  # 5MB
+  backup_count: 5
+
+preprocessors:
+  - type: 'Preprocessor'
+    sequence_length: 60
+    cache_dir: 'cache'
+    frequency: 'B'
+    thread_pool_size: 20
+
+models:
+  - type: 'LSTMModel'
+    sequence_length: 60
+    units: 128          # Increased from 50
+    dropout_rate: 0.3   # Increased from 0.2
+    l2_reg: 0.001
+  - type: 'TransformerModel'
+    sequence_length: 60
+    num_heads: 8        # Increased from 4
+    ff_dim: 256        # Increased from 128
+    num_transformer_blocks: 4  # Increased from 2
+    dropout_rate: 0.3   # Increased from 0.1
+  - type: 'DenseModel'
+    sequence_length: 60
+    layers:
+      - units: 512
+        activation: 'relu'
+      - units: 256
+        activation: 'relu'
+      - units: 128
+        activation: 'relu'
+      - units: 64
+        activation: 'relu'
+
+training:
+  memory_management:
+    chunk_size: 100
+    max_memory_percent: 80
+    cleanup_threshold: 90
+  epochs: 30
+  batch_size: 16
+  num_models: 3
+  validation_split: 0.2
+  target_mae: 0.17
+  max_iterations: 10
+  early_stopping:
+    patience: 5
+    min_delta: 0.001
+    restore_best_weights: true
+  reduce_lr:
+    factor: 0.5
+    patience: 5
+    min_lr: 0.000001
+  mixed_precision: true
+  years: 7
+
+backtesting_results_path: 'data/backtesting_results'
+
+stocks:
+  - "AAPL"
+  - "MSFT"
+  - "GOOGL"
+  - "AMZN"
+  - "TSLA"
+  - "META"
+  - "NVDA"
+  - "DIS"
+  - "V"
+  - "PLTR"
+  - "NFLX"
+  - "BRK-B"
+  - "BABA"
+  - "JNJ"
+  - "PG"
+  - "UNH"
+  - "VZ"
+  - "JPM"
+  - "PFE"
+  - "HD"
+  - "NKE"
+  - "MA"
+  - "TSM"
+  - "MC.PA"
+  - "ASML"
+  - "SHEL"
+  - "SAP"
+  - "BHP"
+  - "TM"
+  - "MBG.DE"
+  - "BMW.DE"
+  - "VOW3.DE"
+  - "DBK.DE"
+  - "BAS.DE"
+  - "SIE.DE"
+  - "ADS.DE"
+  - "IFX.DE"
+  - "LIN.DE"
+  - "BAYN.DE"
+  - "ALV.DE"
+  - "RWE.DE"
+  - "FME.DE"
+  - "FRE.DE"
+  - "HEI.DE"
+  - "HEN3.DE"
+  - "BEI.DE"
+  - "MTX.DE"
+  - "EON.BD"
+  - "ZAL.DE"
+  - "LMT"
+  - "NOC"
+  - "GD"
+  - "BA"
+  - "RTX"
+  - "LHX"
+  - "HII"
+  - "TXT"
+  - "LDOS"
+  - "KTOS"
+  - "SAAB-B.ST"
+  - "AIR.PA"
+  - "GDYN"
+  - "CSF0.SG"
+  - "BA.L"
+  - "DRS"
+  - "AVAV"
+  - "CAE"
+  - "RHM.DE"
+  - "NEM"
+  - "GOLD"
+  - "AEM"
+  - "WPM"
+  - "FNV"
+  - "PAAS"
+  - "KGC"
+  - "SSRM"
+  - "HL"
+  - "XOM"
+  - "CVX"
+  - "BP"
+  - "TTE"
+  - "COP"
+  - "EOG"
+  - "EQNR"
+  - "MRO"
+  - "SU"
+  - "OXY"
+  - "PSX"
+  - "VLO"
+  - "ENB"
+  - "KMI"
+  - "CTRA"
+  - "FANG"
+  - "RIG"
+  - "MPC"
+  - "BAC"
+  - "WFC"
+  - "HSBC"
+  - "TD"
+  - "SAN"
+  - "ITUB"
+  - "AXP"
+  - "MRK"
+  - "ABBV"
+  - "NVS"
+  - "AZN"
+  - "SNY"
+  - "CSL.AX"
+  - "MDT"
+  - "KO"
+  - "PEP"
+  - "UL"
+  - "NESN.SW"
+  - "DEO"
+  - "WMT"
+  - "COST"
+  - "NEE"
+  - "DUK"
+  - "NGG"
+  - "ENEL.MI"
+  - "KEP"
+  - "CAT"
+  - "DE"
+  - "MMM"
+  - "ABBN.SW"
+  - "GE"
+  - "HON"
+  - "EMR"
+  - "RIO"
+  - "VALE"
+  - "LYB"
+  - "APD"
+  - "DOW"
+  - "PLD"
+  - "AMT"
+  - "SPG"
+  - "EQIX"
+  - "PSA"
+  - "SBUX"
+  - "MCD"
+  - "BKNG"
+  - "HMC"
+  - "9983.T"
+  - "ORLY"
+  - "T"
+  - "CHL.F"
+  - "VOD"
+  - "NTES"
+  - "ORCL"
+  - "INTC"
+  - "CSCO"
+  - "ERIC"
+  - "ACN"
+  - "ADBE"
+  - "PTRO.JK"
+  - "ENI.MI"
+  - "CVE"
+  - "CJ1.SG"
+  - "ONGC.NS"
+  - "SO"
+  - "D"
+  - "EXC"
+  - "PCG"
+  - "PEG"
+  - "RDS.AX"
+  - "BIDU"
+  - "TCEHY"
+  - "SHOP"
+  - "INFY"
+  - "BAYRY"
+  - "MELI"
+  - "SPY"
+  - "PKX"

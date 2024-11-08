@@ -1,0 +1,34 @@
+<!-- templates/index.html -->
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="space-y-6">
+    <!-- Search Section -->
+    <section class="bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-2xl font-bold mb-4">Stock Prediction</h2>
+        <div class="relative">
+            <input
+                type="text"
+                name="ticker"
+                class="w-full p-4 border rounded-lg"
+                placeholder="Enter stock ticker (e.g., AAPL)"
+                hx-get="/predict/"
+                hx-trigger="keyup changed delay:500ms, search"
+                hx-target="#prediction-result"
+                hx-indicator="#search-indicator"
+            >
+            <div id="search-indicator" class="htmx-indicator absolute right-4 top-4">
+                {% include 'components/spinner.html' %}
+            </div>
+        </div>
+        
+        <div id="prediction-result" class="mt-4"></div>
+    </section>
+
+    <!-- Top Stocks Section -->
+    <section class="bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-2xl font-bold mb-4">Top Opportunities</h2>
+        {% include 'components/top_stocks.html' %}
+    </section>
+</div>
+{% endblock %}
