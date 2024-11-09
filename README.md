@@ -4,7 +4,7 @@ A full-stack dockerized stock prediction system leveraging machine learning to f
 
 ## Overview
 
-**Compass** is a comprehensive, full-stack application designed to predict stock prices using advanced machine learning algorithms, based on the Elliot-Wave-Theory. The project is fully dockerized, separating concerns into individual containers for streamlined development and deployment. It leverages a PostgreSQL database enhanced with TimescaleDB for efficient time-series data management. The goal is to make stock prdictions good and open-source. I'm not a programmer by any means. I've done all of that with AI (which I'm not so proud about. It's like working with a very smart baby....). I apprichiate any help to keep this project moving forward. 
+**Compass** is a comprehensive, full-stack application designed to predict stock prices using advanced machine learning algorithms, based on the Elliot-Wave-Theory. The project is fully dockerized, separating concerns into individual containers for streamlined development and deployment. It leverages a PostgreSQL database enhanced with TimescaleDB for efficient time-series data management. The goal is to make stock predictions good and open-source. I'm not a programmer by any means. I've done all of that with AI (which I'm not so proud about. It's like working with a very smart baby....). I apprichiate any help to keep this project moving forward. 
 
 ## Architecture
 
