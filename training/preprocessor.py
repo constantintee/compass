@@ -22,7 +22,10 @@ import traceback
 #from dask.distributed import Client
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from technical_analysis import TechnicalAnalysis
+# Import from shared module
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared.technical_analysis import TechnicalAnalysis
 
 load_dotenv()
 
