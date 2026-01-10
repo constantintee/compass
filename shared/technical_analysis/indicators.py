@@ -66,7 +66,22 @@ class TechnicalIndicators:
             # Handle NaN values using modern pandas methods
             if data[required_columns].isna().any().any():
                 self.logger.warning("Data contains NaN values. Attempting to handle them...")
+                data = data.copy()  # Avoid SettingWithCopyWarning
                 data = data.ffill().bfill()
+
+            # Validate minimum data length for indicator calculations
+            min_required_length = max(
+                self.config.EMA_LONG_PERIOD,
+                self.config.BB_PERIOD,
+                self.config.SUPPORT_RESISTANCE_WINDOW,
+                self.config.RSI_PERIOD
+            ) + 10  # Add buffer for warm-up period
+
+            if len(data) < min_required_length:
+                self.logger.warning(
+                    f"Insufficient data points ({len(data)}) for ticker {ticker}. "
+                    f"Minimum required: {min_required_length}"
+                )
 
             # Calculate support and resistance first
             support_resistance_df = self.calculate_support_resistance(data)

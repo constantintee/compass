@@ -98,7 +98,14 @@ class TechnicalAnalysis:
             # Handle NaN values using modern pandas methods
             if data[required_columns].isna().any().any():
                 self.logger.warning("Data contains NaN values. Attempting to handle them...")
+                data = data.copy()  # Avoid SettingWithCopyWarning
                 data = data.ffill().bfill()
+
+            # Ensure data index is proper DatetimeIndex for Elliott Wave analysis
+            if not isinstance(data.index, pd.DatetimeIndex):
+                if 'date' in data.columns:
+                    data = data.set_index('date')
+                    data.index = pd.to_datetime(data.index)
 
             # Calculate base indicators
             data_with_indicators = self.indicators.calculate_all_indicators(data, ticker)
