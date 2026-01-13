@@ -49,18 +49,27 @@ preprocessors:
     frequency: 'B'
     thread_pool_size: 20
 
+# =============================================================================
+# OPTIMIZED MODEL CONFIGURATIONS FOR BEST PREDICTIONS
+# =============================================================================
+
 models:
+  # Enhanced Attention-LSTM Model
   - type: 'LSTMModel'
     sequence_length: 60
-    units: 128          # Increased from 50
-    dropout_rate: 0.3   # Increased from 0.2
-    l2_reg: 0.001
+    units: 192              # Larger capacity for complex patterns
+    dropout_rate: 0.25      # Balanced regularization
+    l2_reg: 0.0005          # Lighter regularization
+
+  # Enhanced Transformer Model with multi-scale attention
   - type: 'TransformerModel'
     sequence_length: 60
-    num_heads: 8        # Increased from 4
-    ff_dim: 256        # Increased from 128
-    num_transformer_blocks: 4  # Increased from 2
-    dropout_rate: 0.3   # Increased from 0.1
+    num_heads: 8            # Multi-head attention
+    ff_dim: 384             # Increased capacity
+    num_transformer_blocks: 6  # Deeper network
+    dropout_rate: 0.2       # Moderate dropout
+
+  # CNN-Hybrid Model for local pattern detection
   - type: 'DenseModel'
     sequence_length: 60
     layers:
@@ -73,26 +82,68 @@ models:
       - units: 64
         activation: 'relu'
 
+# =============================================================================
+# OPTIMIZED TRAINING CONFIGURATION
+# =============================================================================
+
 training:
   memory_management:
     chunk_size: 100
-    max_memory_percent: 80
+    max_memory_percent: 85
     cleanup_threshold: 90
-  epochs: 30
-  batch_size: 16
+
+  # Training parameters - Optimized for best predictions
+  epochs: 60                    # More epochs for better convergence
+  batch_size: 32                # Larger batch for stable gradients
   num_models: 3
   validation_split: 0.2
-  target_mae: 0.17
-  max_iterations: 10
+
+  # Target metrics
+  target_mae: 0.12              # More aggressive target
+  max_iterations: 15
+
+  # Learning rate configuration
+  initial_learning_rate: 0.0003  # Peak LR after warmup
+  min_learning_rate: 0.0000001
+  warmup_epochs: 5
+
+  # Early stopping - Increased patience for SWA
   early_stopping:
-    patience: 5
-    min_delta: 0.001
+    patience: 15                # More patience for SWA convergence
+    min_delta: 0.0001           # Finer improvement detection
     restore_best_weights: true
+
+  # Learning rate reduction
   reduce_lr:
     factor: 0.5
-    patience: 5
-    min_lr: 0.000001
+    patience: 7
+    min_lr: 0.0000001
+
+  # Meta-model specific settings
+  meta_epochs: 100              # More epochs for meta-model
+  meta_learning_rate: 0.001     # Higher LR for meta-model
+
+  # Advanced features
   mixed_precision: true
+  use_swa: true                 # Stochastic Weight Averaging
+  swa_start_epoch: 20           # Start SWA after epoch 20
+  use_cosine_annealing: true    # Cosine annealing with warm restarts
+
+  # Loss function configuration
+  loss_function:
+    type: 'combined'            # combined, huber, or mse
+    huber_weight: 0.4
+    mse_weight: 0.4
+    direction_weight: 0.2       # Weight for directional accuracy
+    huber_delta: 1.0
+
+  # Data augmentation
+  augmentation:
+    enabled: true
+    jitter_sigma: 0.03
+    scaling_sigma: 0.1
+    augment_probability: 0.3
+
   years: 7
 
 backtesting_results_path: 'data/backtesting_results'

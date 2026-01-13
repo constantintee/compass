@@ -1,4 +1,5 @@
 # File: training.py
+# Optimized training script for best predictions
 
 import os
 import sys
@@ -17,10 +18,14 @@ from psycopg2 import OperationalError
 # Add shared module to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.preprocessing import Preprocessor
-from models import BaseModel, LSTMModel, TransformerModel, DenseModel, DatasetValidator
+from models import (BaseModel, LSTMModel, TransformerModel, DenseModel,
+                    DatasetValidator, TimeSeriesAugmentation)
 from ensemble import EnsembleModel
 from backtester import Backtester
-from utils import setup_logger, load_configuration, load_and_process_individual_tfrecords_parallel, estimate_dataset_size, log_memory_usage, get_memory_usage, clean_memory, MemoryMonitor, monitor_memory
+from utils import (setup_logger, load_configuration,
+                   load_and_process_individual_tfrecords_parallel,
+                   estimate_dataset_size, log_memory_usage, get_memory_usage,
+                   clean_memory, MemoryMonitor, monitor_memory)
 
 
 # Set GPU memory growth before any TensorFlow operations
@@ -104,29 +109,35 @@ def main():
                     
             # Initialize EnsembleModel with optimized configuration
             try:
-                logger.info("[Ensemble Initialization] Initializing EnsembleModel with optimized models...")
+                logger.info("="*80)
+                logger.info("[Ensemble Initialization] Initializing OPTIMIZED EnsembleModel...")
+                logger.info("="*80)
+
                 base_models = []
                 for model_conf in models_config:
                     model_type = model_conf.get('type')
+
                     if model_type == 'LSTMModel':
                         model = LSTMModel(
                             sequence_length=model_conf.get('sequence_length', 60),
-                            units=model_conf.get('units', 128),
-                            dropout_rate=model_conf.get('dropout_rate', 0.3),
-                            l2_reg=model_conf.get('l2_reg', 0.001)
+                            units=model_conf.get('units', 192),  # Increased capacity
+                            dropout_rate=model_conf.get('dropout_rate', 0.25),
+                            l2_reg=model_conf.get('l2_reg', 0.0005)
                         )
                         base_models.append(model)
-                        logger.info(f"[Ensemble Initialization] Initialized optimized LSTMModel.")
+                        logger.info(f"[Ensemble] Initialized Enhanced Attention-LSTM Model (units={model_conf.get('units', 192)})")
+
                     elif model_type == 'TransformerModel':
                         model = TransformerModel(
                             sequence_length=model_conf.get('sequence_length', 60),
                             num_heads=model_conf.get('num_heads', 8),
-                            ff_dim=model_conf.get('ff_dim', 256),
-                            num_transformer_blocks=model_conf.get('num_transformer_blocks', 4),
-                            dropout_rate=model_conf.get('dropout_rate', 0.3)
+                            ff_dim=model_conf.get('ff_dim', 384),  # Increased capacity
+                            num_transformer_blocks=model_conf.get('num_transformer_blocks', 6),  # Deeper
+                            dropout_rate=model_conf.get('dropout_rate', 0.2)
                         )
                         base_models.append(model)
-                        logger.info(f"[Ensemble Initialization] Initialized optimized TransformerModel.")
+                        logger.info(f"[Ensemble] Initialized Enhanced Transformer Model (blocks={model_conf.get('num_transformer_blocks', 6)}, ff_dim={model_conf.get('ff_dim', 384)})")
+
                     elif model_type == 'DenseModel':
                         model = DenseModel(
                             sequence_length=model_conf.get('sequence_length', 60),
@@ -138,7 +149,18 @@ def main():
                             ])
                         )
                         base_models.append(model)
-                        logger.info(f"[Ensemble Initialization] Initialized optimized DenseModel.")
+                        logger.info(f"[Ensemble] Initialized CNN-Hybrid Model with multi-scale convolutions")
+
+                # Log optimization features
+                logger.info("-"*80)
+                logger.info("Optimization Features Enabled:")
+                logger.info("  - Advanced Loss: Combined (Huber + MSE + Directional)")
+                logger.info("  - Learning Rate: Warmup + Cosine Decay")
+                logger.info("  - Regularization: AdamW with weight decay")
+                logger.info("  - Generalization: Stochastic Weight Averaging (SWA)")
+                logger.info("  - Attention: Multi-head self-attention in LSTM")
+                logger.info("  - Meta-model: Deep network with MC Dropout for uncertainty")
+                logger.info("-"*80)
 
                 ensemble = EnsembleModel(base_models=base_models, config=config)
                 logger.info(f"[Ensemble Initialization] EnsembleModel initialized with {len(base_models)} optimized models.")
