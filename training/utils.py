@@ -325,142 +325,151 @@ def parse_function(example_proto, sequence_length, num_features):
         )
 
 def load_and_process_individual_tfrecords_parallel(individual_tfrecord_path, config):
-    """Load and process TFRecord files with improved validation."""
+    """Load and process TFRecord files with optimized performance."""
     logger = logging.getLogger('training_logger')
     try:
         # Get configuration
         training_config = config.get('training', {})
         sequence_length = training_config.get('sequence_length', 60)
-        num_features = 40  # Update this based on your data
         batch_size = training_config.get('batch_size', 32)
-        
+
         # Get list of TFRecord files
         tfrecord_files = [
             os.path.join(individual_tfrecord_path, f)
             for f in os.listdir(individual_tfrecord_path)
             if f.endswith('.tfrecord')
         ]
-        
+
         if not tfrecord_files:
             raise ValueError("No TFRecord files found")
-            
+
         logger.info(f"Found {len(tfrecord_files)} TFRecord files")
-        
-        # Create dataset from files
-        raw_dataset = tf.data.Dataset.from_tensor_slices(tfrecord_files)
-        
-        # Create TFRecord dataset
-        dataset = raw_dataset.interleave(
-            lambda x: tf.data.TFRecordDataset(
-                x,
-                compression_type=None,
-                buffer_size=8*1024*1024
-            ),
-            cycle_length=4,
-            block_length=16,
-            num_parallel_calls=tf.data.AUTOTUNE
+
+        # Dynamically detect num_features from first file
+        num_features = get_num_features_from_tfrecord(individual_tfrecord_path, sequence_length)
+        if num_features is None:
+            num_features = 40  # Fallback default
+            logger.warning(f"Could not detect num_features, using default: {num_features}")
+
+        # Shuffle file list for better data distribution
+        np.random.shuffle(tfrecord_files)
+
+        # Split files into train/val (80/20) - more efficient than splitting records
+        split_idx = int(len(tfrecord_files) * 0.8)
+        train_files = tfrecord_files[:split_idx]
+        val_files = tfrecord_files[split_idx:]
+
+        logger.info(f"Training files: {len(train_files)}, Validation files: {len(val_files)}")
+
+        # Optimize parallel reads based on CPU count
+        num_parallel_reads = min(multiprocessing.cpu_count(), 8)
+
+        # Create optimized training dataset
+        train_dataset = tf.data.TFRecordDataset(
+            train_files,
+            compression_type=None,
+            buffer_size=8*1024*1024,
+            num_parallel_reads=num_parallel_reads
         )
-        
-        # Count total examples
-        total_examples = 0
-        for _ in dataset:
-            total_examples += 1
-            if total_examples >= 100000:  # Limit count for efficiency
-                break
-                
-        # Calculate total batches
-        total_batches = total_examples // batch_size
-        train_batches = int(0.8 * total_batches)
-        val_batches = total_batches - train_batches
-        
-        logger.info(f"Total examples: {total_examples}")
-        logger.info(f"Total batches: {total_batches}")
-        logger.info(f"Training batches: {train_batches}")
-        logger.info(f"Validation batches: {val_batches}")
-        
-        # Split dataset
-        train_size = train_batches * batch_size
-        train_dataset = dataset.take(train_size)
-        val_dataset = dataset.skip(train_size).take(val_batches * batch_size)
-        
-        # Process datasets (call your existing create_safe_dataset function)
+
+        # Create optimized validation dataset
+        val_dataset = tf.data.TFRecordDataset(
+            val_files,
+            compression_type=None,
+            buffer_size=8*1024*1024,
+            num_parallel_reads=num_parallel_reads
+        )
+
+        # Estimate total batches efficiently using file sizes
+        total_file_size = sum(os.path.getsize(f) for f in tfrecord_files)
+        avg_record_size = 4 * (sequence_length * num_features + 1)  # Approximate bytes per record
+        estimated_examples = total_file_size // avg_record_size
+        total_batches = max(1, estimated_examples // batch_size)
+
+        logger.info(f"Estimated total examples: {estimated_examples}")
+        logger.info(f"Estimated total batches: {total_batches}")
+
+        # Process datasets with caching for efficiency
         train_dataset = create_safe_dataset(
             train_dataset, sequence_length, num_features, batch_size, is_training=True
         )
         val_dataset = create_safe_dataset(
             val_dataset, sequence_length, num_features, batch_size, is_training=False
         )
-        
+
         # Verify datasets
         for features, targets in train_dataset.take(1):
-            logger.info("\nTraining dataset shapes:")
-            logger.info(f"Features: {features.shape}")
-            logger.info(f"Targets: {targets.shape}")
-        
+            logger.info(f"\nTraining dataset shapes: Features={features.shape}, Targets={targets.shape}")
+
         for features, targets in val_dataset.take(1):
-            logger.info("\nValidation dataset shapes:")
-            logger.info(f"Features: {features.shape}")
-            logger.info(f"Targets: {targets.shape}")
-        
+            logger.info(f"Validation dataset shapes: Features={features.shape}, Targets={targets.shape}")
+
         return train_dataset, val_dataset, num_features, total_batches
-        
+
     except Exception as e:
         logger.error(f"Error loading TFRecords: {str(e)}")
         raise
 
 def create_safe_dataset(dataset, sequence_length, num_features, batch_size, is_training=True):
-    """Create a dataset with safe parsing and error handling."""
+    """Create a dataset with safe parsing, caching, and optimized performance."""
     feature_description = {
         'features': tf.io.FixedLenFeature([sequence_length * num_features], tf.float32),
         'target': tf.io.FixedLenFeature([1], tf.float32),
     }
-    
+
     def safe_parse_function(example_proto):
-        try:
-            parsed = tf.io.parse_single_example(example_proto, feature_description)
-            features = tf.reshape(parsed['features'], [sequence_length, num_features])
-            target = parsed['target'][0]
-            
-            # Handle invalid values
-            features = tf.where(tf.math.is_finite(features), features, tf.zeros_like(features))
-            target = tf.where(tf.math.is_finite(target), target, tf.constant(0.0))
-            
-            # Normalize features
-            features = tf.clip_by_value(features, -10.0, 10.0)
-            features_mean = tf.reduce_mean(features, axis=0, keepdims=True)
-            features_std = tf.math.reduce_std(features, axis=0, keepdims=True)
-            features_std = tf.where(features_std > 0, features_std, tf.ones_like(features_std))
-            features = (features - features_mean) / (features_std + 1e-6)
-            
-            return features, target
-            
-        except Exception:
-            return (
-                tf.zeros([sequence_length, num_features], dtype=tf.float32),
-                tf.constant(0.0, dtype=tf.float32)
-            )
-    
-    # Map parse function
+        parsed = tf.io.parse_single_example(example_proto, feature_description)
+        features = tf.reshape(parsed['features'], [sequence_length, num_features])
+        target = parsed['target'][0]
+
+        # Handle invalid values efficiently using vectorized operations
+        features = tf.where(tf.math.is_finite(features), features, tf.zeros_like(features))
+        target = tf.where(tf.math.is_finite(target), target, tf.constant(0.0))
+
+        # Clip extreme values
+        features = tf.clip_by_value(features, -10.0, 10.0)
+
+        # Per-sequence normalization (more efficient than per-feature)
+        features_mean = tf.reduce_mean(features)
+        features_std = tf.math.reduce_std(features)
+        features_std = tf.maximum(features_std, 1e-6)
+        features = (features - features_mean) / features_std
+
+        return features, target
+
+    # Parse with parallel processing
     dataset = dataset.map(
         safe_parse_function,
-        num_parallel_calls=tf.data.AUTOTUNE
+        num_parallel_calls=tf.data.AUTOTUNE,
+        deterministic=False  # Allow non-deterministic ordering for speed
     )
-    
-    # Add shuffling for training
+
+    # Filter out any zero-target samples (invalid data)
+    dataset = dataset.filter(lambda x, y: tf.not_equal(y, 0.0))
+
     if is_training:
+        # Cache after parsing but before shuffling for training data
+        dataset = dataset.cache()
+        # Use dynamic shuffle buffer based on available memory
+        shuffle_buffer, _ = get_optimal_buffer_sizes()
         dataset = dataset.shuffle(
-            buffer_size=10000,
+            buffer_size=shuffle_buffer,
             reshuffle_each_iteration=True
         )
-    
-    # Batch and prefetch
+    else:
+        # Cache validation data
+        dataset = dataset.cache()
+
+    # Batch with parallel processing
     dataset = dataset.batch(
         batch_size,
-        drop_remainder=True
-    ).prefetch(
-        tf.data.AUTOTUNE
+        drop_remainder=True,
+        num_parallel_calls=tf.data.AUTOTUNE
     )
-    
+
+    # Prefetch for pipeline efficiency
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+
     return dataset
 
 def estimate_dataset_size(dataset: tf.data.Dataset, logger) -> int:

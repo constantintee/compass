@@ -279,76 +279,49 @@ class EnsembleModel:
             clean_memory()
 
     def prepare_meta_features(self, dataset):
-        """Memory-efficient meta feature preparation with dataset length handling"""
+        """Optimized meta feature preparation using batch processing."""
         try:
-            meta_features = []
+            all_predictions = [[] for _ in self.ensemble_models]
             actual_targets = []
-            total_examples = 0
-                
-            # First pass to count examples
-            for _ in dataset:
-                total_examples += 1
-                
-            if total_examples == 0:
+            batch_count = 0
+
+            # Process dataset in a single pass - no counting needed
+            for X_batch, y_batch in dataset:
+                batch_count += 1
+
+                # Get predictions from all models for this batch
+                for idx, model in enumerate(self.ensemble_models):
+                    try:
+                        pred = model.predict(X_batch, verbose=0)
+                        all_predictions[idx].extend(pred.flatten())
+                    except Exception as e:
+                        self.logger.error(f"Error in model {idx} prediction: {str(e)}")
+                        # Pad with zeros to maintain alignment
+                        all_predictions[idx].extend([0.0] * len(y_batch))
+
+                # Collect targets
+                actual_targets.extend(y_batch.numpy().flatten())
+
+                # Log progress every 50 batches
+                if batch_count % 50 == 0:
+                    self.logger.info(f"Processed {batch_count} batches for meta features")
+
+            if batch_count == 0:
                 self.logger.error("Empty dataset provided")
                 return np.array([]), np.array([])
-                
-            self.logger.info(f"Processing {total_examples} examples for meta features")
-                
-            # Reset dataset iterator
-            dataset = dataset.repeat(1)
-            
-            # Process in smaller chunks
-            chunk_size = min(100, total_examples)
-            for chunk_start in range(0, total_examples, chunk_size):
-                chunk_data = list(dataset.skip(chunk_start).take(chunk_size))
-                if not chunk_data:
-                    break
-                    
-                chunk_predictions = []
-                for model in self.ensemble_models:
-                    preds = []
-                    for X_batch, _ in chunk_data:
-                        try:
-                            pred = model.predict(X_batch, verbose=0)
-                            preds.extend(pred.flatten())
-                        except Exception as e:
-                            self.logger.error(f"Error in model prediction: {str(e)}")
-                            continue
-                    chunk_predictions.append(preds)
-                
-                if chunk_predictions:
-                    # Transpose predictions and add to meta features
-                    chunk_meta = np.array(chunk_predictions).T
-                    meta_features.append(chunk_meta)
-                    
-                    # Extract targets
-                    chunk_targets = np.concatenate([y.numpy() for _, y in chunk_data])
-                    actual_targets.append(chunk_targets)
-                    
-                    # Log progress
-                    self.logger.info(f"Processed {len(meta_features) * chunk_size} examples")
-                    
-                # Cleanup
-                gc.collect()
-                
-            if not meta_features:
-                self.logger.error("No valid predictions generated")
-                return np.array([]), np.array([])
-                
-            # Combine results
-            meta_features = np.vstack(meta_features)
-            actual_targets = np.concatenate(actual_targets)
-                
+
+            # Convert to numpy arrays and transpose
+            meta_features = np.array(all_predictions).T
+            actual_targets = np.array(actual_targets)
+
             self.logger.info(f"Final meta features shape: {meta_features.shape}")
+            self.logger.info(f"Total batches processed: {batch_count}")
+
             return meta_features, actual_targets
-                
+
         except Exception as e:
             self.logger.error(f"Error preparing meta features: {e}")
             return np.array([]), np.array([])
-            
-        finally:
-            gc.collect()
 
     def train_meta_model(self, X, y, X_val, y_val, config):
         """Train meta-model using configuration settings with robust NaN handling"""
@@ -445,6 +418,9 @@ class EnsembleModel:
                         metrics=[SafeMAE()]
                     )
 
+                    # Calculate total batches from meta features shape
+                    total_meta_batches = max(1, len(meta_train_scaled) // batch_size)
+
                     callbacks = [
                         EarlyStopping(
                             monitor='val_loss' if meta_val is not None else 'loss',
@@ -468,7 +444,7 @@ class EnsembleModel:
                         PerformanceMonitorCallback(
                             self.logger,
                             batch_size,
-                            sum(1 for _ in X)  # Count batches in training dataset
+                            total_meta_batches
                         )
                     ]
 
