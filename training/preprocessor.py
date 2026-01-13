@@ -22,7 +22,10 @@ import traceback
 #from dask.distributed import Client
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from technical_analysis import TechnicalAnalysis
+# Import from shared module
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared.technical_analysis import TechnicalAnalysis
 
 load_dotenv()
 
@@ -210,14 +213,14 @@ class Preprocessor:
             if df[col].isnull().any():
                 self.logger.warning(f"[Preprocessing] Ticker {ticker}: Found NaNs in '{col}' after conversion.")
                 if col == 'open':
-                    # Attempt multiple imputation strategies
-                    df[col].fillna(df[col].mean(), inplace=True)
-                    df[col].fillna(method='ffill', inplace=True)
-                    df[col].fillna(method='bfill', inplace=True)
+                    # Attempt multiple imputation strategies - using modern pandas methods
+                    df[col] = df[col].fillna(df[col].mean())
+                    df[col] = df[col].ffill()
+                    df[col] = df[col].bfill()
                 elif col == 'volume':
-                    df[col].fillna(df[col].median(), inplace=True)
-                    df[col].fillna(method='ffill', inplace=True)
-                    df[col].fillna(method='bfill', inplace=True)
+                    df[col] = df[col].fillna(df[col].median())
+                    df[col] = df[col].ffill()
+                    df[col] = df[col].bfill()
 
                 # Check if NaNs still exist
                 remaining_nans = df[col].isnull().sum()
@@ -278,9 +281,9 @@ class Preprocessor:
 
     def handle_missing_values(self, df: pd.DataFrame, ticker: str) -> pd.DataFrame:
         try:
-            # Fill NaNs using forward and backward filling first
-            df.fillna(method='ffill', inplace=True)
-            df.fillna(method='bfill', inplace=True)
+            # Fill NaNs using forward and backward filling first - using modern pandas methods
+            df = df.ffill()
+            df = df.bfill()
 
             # Handle remaining NaNs for the 'volume' column separately
             if 'volume' in df.columns:
@@ -291,10 +294,10 @@ class Preprocessor:
                         self.logger.warning(f"[Preprocessing] Ticker {ticker}: 'volume' column median is NaN. Attempting to fill with a default value.")
                         # Decide on a default value or strategy
                         default_volume = 1  # Example default value
-                        df['volume'].fillna(default_volume, inplace=True)
+                        df['volume'] = df['volume'].fillna(default_volume)
                     else:
                         self.logger.warning(f"[Preprocessing] Ticker {ticker}: Filling remaining NaNs in 'volume' column with median value: {median_volume}.")
-                        df['volume'].fillna(median_volume, inplace=True)
+                        df['volume'] = df['volume'].fillna(median_volume)
 
                     # Check if NaNs still exist
                     if df['volume'].isna().sum() > 0:
@@ -332,7 +335,7 @@ class Preprocessor:
                     df[column] = pd.to_numeric(df[column], errors='coerce')
                     if df[column].isna().sum() > 0:
                         self.logger.warning(f"[Preprocessing] Ticker {ticker}: Found NaNs in '{column}' after conversion. Attempting to fill with column mean.")
-                        df[column].fillna(df[column].mean(), inplace=True)
+                        df[column] = df[column].fillna(df[column].mean())
 
             df = self.handle_missing_values(df, ticker)
 
@@ -371,15 +374,16 @@ class Preprocessor:
                 self.logger.warning(f"[Preprocessing] {num_missing} missing dates found for ticker {ticker}. Filling missing data.")
 
                 # Fill missing data using a combination of interpolation and forward/backward filling
-                df.interpolate(method='linear', inplace=True, limit_direction='both')
-                df.fillna(method='ffill', inplace=True)
-                df.fillna(method='bfill', inplace=True)
+                # Using modern pandas methods
+                df = df.interpolate(method='linear', limit_direction='both')
+                df = df.ffill()
+                df = df.bfill()
 
             # If there are still any NaN values, fill them with column means
             if df.isnull().values.any():
                 remaining_nans = df.isnull().sum().sum()
                 self.logger.warning(f"[Preprocessing] Ticker {ticker}: {remaining_nans} NaN values remaining after all filling attempts. Filling with column means.")
-                df.fillna(df.mean(), inplace=True)
+                df = df.fillna(df.mean())
 
             # Reset the index and ensure 'date' is a column
             df.reset_index(inplace=True)

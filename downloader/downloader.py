@@ -29,8 +29,10 @@ import traceback
 from dotenv import load_dotenv
 from typing import Optional, Tuple
 
-from technical_analysis import TechnicalAnalysis, AdvancedElliottWaveAnalysis
-from preprocessor import Preprocessor
+# Import from shared module
+from shared.technical_analysis import TechnicalAnalysis, AdvancedElliottWaveAnalysis
+from shared.preprocessing import Preprocessor
+from shared.constants import ValidationThresholds, RetryConfig
 
 # Security constants
 MAX_TICKER_LENGTH = 15
@@ -347,10 +349,9 @@ class StockDataPipeline:
             # # 6. Combine all data
             # final_data = pd.concat([data_with_indicators, elliott_wave_df], axis=1)
             
-            # 7. Store in TimescaleDB
-            success = self.store_data(ticker, final_data)
-            
-            return success
+            # Data is now stored via the Preprocessor's TFRecord writing
+            # The parallel_preprocess_stocks handles the complete pipeline
+            return True
 
         except Exception as e:
             self.logger.error(f"Error processing {ticker}: {str(e)}")
@@ -661,15 +662,15 @@ class StockDataPipeline:
     def handle_missing_values(self, df: pd.DataFrame) -> pd.DataFrame:
         """Handle missing values in the dataset"""
         try:
-            # Forward fill price data (limited to 5 days)
+            # Forward fill price data (limited to 5 days) - using modern pandas methods
             price_columns = ['open', 'high', 'low', 'close']
-            df[price_columns] = df[price_columns].fillna(method='ffill', limit=5)
+            df[price_columns] = df[price_columns].ffill(limit=5)
 
             # Fill remaining gaps with linear interpolation
             df[price_columns] = df[price_columns].interpolate(method='linear', limit=5)
 
-            # Handle volume separately
-            df['volume'] = df['volume'].fillna(method='ffill').fillna(0)
+            # Handle volume separately - using modern pandas methods
+            df['volume'] = df['volume'].ffill().fillna(0)
 
             # Remove any remaining rows with NaN values
             df = df.dropna()
@@ -716,7 +717,7 @@ def main():
         config_path = "data/config.yaml"
         config = load_config(config_path)
 
-        logging = setup_logging(config)
+        log_handler = setup_logging(config)
 
 
         # Initialize pipeline

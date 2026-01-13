@@ -15,7 +15,7 @@ import hashlib
 import json
 
 import psycopg2
-from psycopg2 import pool
+from psycopg2 import pool, extras
 from psycopg2.extras import RealDictCursor
 from psycopg2 import OperationalError
 
@@ -62,11 +62,12 @@ class DBConnectionManager:
 
 class TechnicalAnalysisCache:
     """Caching system for technical analysis calculations"""
-    
+
     def __init__(self, cache_size: int = 128):
         self.cache = {}
         self.cache_size = cache_size
         self._config_hashes = {}
+        self._config_hash = None
 
     def get_config_hash(self, config: Dict) -> str:
         """Generate a deterministic hash for a configuration"""
@@ -626,29 +627,6 @@ class TechnicalAnalysis:
             self.logger.debug(traceback.format_exc())
             return pd.DataFrame(index=data.index)        
 
-
-class TechnicalAnalysisCache:
-    def __init__(self, cache_size=128):
-        self.cache = {}
-        self._config_hash = None
-
-    def get_config_hash(self, config: Dict) -> str:
-        """Generate hash for indicator configuration"""
-        config_str = json.dumps(config, sort_keys=True)
-        return hashlib.sha256(config_str.encode()).hexdigest()
-
-    @lru_cache(maxsize=128)
-    def get_cached_data(self, ticker: str, date_range: Tuple[datetime, datetime], version: int) -> Optional[pd.DataFrame]:
-        cache_key = (ticker, date_range, version)
-        return self.cache.get(cache_key)
-
-    def set_cached_data(self, ticker: str, date_range: Tuple[datetime, datetime], version: int, data: pd.DataFrame):
-        cache_key = (ticker, date_range, version)
-        self.cache[cache_key] = data
-
-    def clear_cache(self):
-        self.cache.clear()
-        self.get_cached_data.cache_clear()
 
 class WavePatternType:
     """Enum-like class for wave pattern types"""

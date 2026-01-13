@@ -13,6 +13,15 @@ from django.conf import settings
 from typing import List, Dict, Optional, Tuple
 
 from .models import Stock, StockData, StockPrediction
+from .models import Stock, StockPrice, StockPrediction
+
+# Import from shared module
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+from shared.technical_analysis import TechnicalAnalysis
+from training.models import BaseModel, LSTMModel
+from training.ensemble import EnsembleModel
 
 logger = logging.getLogger('predictor')
 

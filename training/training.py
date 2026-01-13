@@ -16,11 +16,13 @@ from typing import List, Dict, Any, Optional, Tuple, Callable
 from psycopg2 import OperationalError
 
 # Import classes and functions from other modules
-from preprocessor import Preprocessor
+# Add shared module to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from shared.preprocessing import Preprocessor
 from models import BaseModel, LSTMModel, TransformerModel, DenseModel, DatasetValidator
 from ensemble import EnsembleModel
 from backtester import Backtester
-from utils import setup_logger, load_configuration, load_and_process_individual_tfrecords_parallel, estimate_dataset_size, log_memory_usage, get_memory_usage,clean_memory, MemoryMonitor, monitor_memory, log_memory_usage, get_memory_usage
+from utils import setup_logger, load_configuration, load_and_process_individual_tfrecords_parallel, estimate_dataset_size, log_memory_usage, get_memory_usage, clean_memory, MemoryMonitor, monitor_memory
 
 # Security constants
 DEFAULT_CONFIG_PATH = "data/config.yaml"
