@@ -461,32 +461,54 @@ class StockDataPipeline:
                 end_idx = min((i + 1) * chunk_size, len(data))
                 chunk = data.iloc[start_idx:end_idx]
 
-                # Prepare data for insertion
-                values = []
-                for idx, row in chunk.iterrows():
-                    values.append((
+                # Prepare data for insertion using itertuples (faster than iterrows)
+                # Pre-extract column values as arrays for efficient access
+                opens = chunk['Open'].values
+                highs = chunk['High'].values
+                lows = chunk['Low'].values
+                closes = chunk['Close'].values
+                volumes = chunk['Volume'].values
+                rsi = chunk['RSI'].values if 'RSI' in chunk.columns else np.zeros(len(chunk))
+                macd_vals = chunk['MACD'].values if 'MACD' in chunk.columns else np.zeros(len(chunk))
+                macd_signal = chunk['MACD_Signal'].values if 'MACD_Signal' in chunk.columns else np.zeros(len(chunk))
+                macd_hist = chunk['MACD_Hist'].values if 'MACD_Hist' in chunk.columns else np.zeros(len(chunk))
+                ema_12 = chunk['EMA_12'].values if 'EMA_12' in chunk.columns else np.zeros(len(chunk))
+                ema_26 = chunk['EMA_26'].values if 'EMA_26' in chunk.columns else np.zeros(len(chunk))
+                bb_upper = chunk['BB_Upper'].values if 'BB_Upper' in chunk.columns else np.zeros(len(chunk))
+                bb_middle = chunk['BB_Middle'].values if 'BB_Middle' in chunk.columns else np.zeros(len(chunk))
+                bb_lower = chunk['BB_Lower'].values if 'BB_Lower' in chunk.columns else np.zeros(len(chunk))
+                ew_pattern = chunk['elliott_wave_pattern'].values if 'elliott_wave_pattern' in chunk.columns else [None] * len(chunk)
+                ew_degree = chunk['elliott_wave_degree'].values if 'elliott_wave_degree' in chunk.columns else [None] * len(chunk)
+                ew_position = chunk['elliott_wave_position'].values if 'elliott_wave_position' in chunk.columns else np.zeros(len(chunk))
+                support = chunk['support_level'].values if 'support_level' in chunk.columns else np.zeros(len(chunk))
+                resistance = chunk['resistance_level'].values if 'resistance_level' in chunk.columns else np.zeros(len(chunk))
+
+                values = [
+                    (
                         ticker,
-                        idx,  # date is index
-                        float(row['Open']),
-                        float(row['High']),
-                        float(row['Low']),
-                        float(row['Close']),
-                        int(row['Volume']),
-                        float(row.get('RSI', 0)),
-                        float(row.get('MACD', 0)),
-                        float(row.get('MACD_Signal', 0)),
-                        float(row.get('MACD_Hist', 0)),
-                        float(row.get('EMA_12', 0)),
-                        float(row.get('EMA_26', 0)),
-                        float(row.get('BB_Upper', 0)),
-                        float(row.get('BB_Middle', 0)),
-                        float(row.get('BB_Lower', 0)),
-                        row.get('elliott_wave_pattern'),
-                        row.get('elliott_wave_degree'),
-                        int(row.get('elliott_wave_position', 0)),
-                        float(row.get('support_level', 0)),
-                        float(row.get('resistance_level', 0))
-                    ))
+                        chunk.index[i],  # date is index
+                        float(opens[i]),
+                        float(highs[i]),
+                        float(lows[i]),
+                        float(closes[i]),
+                        int(volumes[i]),
+                        float(rsi[i]) if not np.isnan(rsi[i]) else 0.0,
+                        float(macd_vals[i]) if not np.isnan(macd_vals[i]) else 0.0,
+                        float(macd_signal[i]) if not np.isnan(macd_signal[i]) else 0.0,
+                        float(macd_hist[i]) if not np.isnan(macd_hist[i]) else 0.0,
+                        float(ema_12[i]) if not np.isnan(ema_12[i]) else 0.0,
+                        float(ema_26[i]) if not np.isnan(ema_26[i]) else 0.0,
+                        float(bb_upper[i]) if not np.isnan(bb_upper[i]) else 0.0,
+                        float(bb_middle[i]) if not np.isnan(bb_middle[i]) else 0.0,
+                        float(bb_lower[i]) if not np.isnan(bb_lower[i]) else 0.0,
+                        ew_pattern[i],
+                        ew_degree[i],
+                        int(ew_position[i]) if not np.isnan(ew_position[i]) else 0,
+                        float(support[i]) if not np.isnan(support[i]) else 0.0,
+                        float(resistance[i]) if not np.isnan(resistance[i]) else 0.0
+                    )
+                    for i in range(len(chunk))
+                ]
 
                 # Bulk insert
                 cursor.executemany("""

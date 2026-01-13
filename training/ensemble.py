@@ -51,6 +51,38 @@ class MCDropout(Layer):
         return config
 
 
+def compute_interaction_features(meta_data: tf.Tensor, n_models: int) -> Optional[tf.Tensor]:
+    """
+    Compute interaction features between base model predictions.
+
+    This function computes pairwise differences and ratios between model predictions,
+    which helps the meta-model learn how different models relate to each other.
+
+    Args:
+        meta_data: Tensor of shape (batch_size, n_models) containing model predictions
+        n_models: Number of base models
+
+    Returns:
+        Tensor of interaction features or None if n_models < 2
+    """
+    if n_models < 2:
+        return None
+
+    interaction_features = []
+    for i in range(n_models):
+        for j in range(i + 1, n_models):
+            # Difference between models
+            diff = meta_data[:, i] - meta_data[:, j]
+            interaction_features.append(tf.expand_dims(diff, -1))
+            # Ratio between models (with safety for division by zero)
+            ratio = meta_data[:, i] / (tf.abs(meta_data[:, j]) + 1e-7)
+            interaction_features.append(tf.expand_dims(ratio, -1))
+
+    if interaction_features:
+        return tf.concat(interaction_features, axis=-1)
+    return None
+
+
 class EnsembleModel:
     def __init__(self, base_models: List[BaseModel], config: dict):
         if not isinstance(config, dict):
@@ -302,40 +334,51 @@ class EnsembleModel:
             clean_memory()
 
     def prepare_meta_features(self, dataset):
-        """Optimized meta feature preparation using batch processing."""
+        """Optimized meta feature preparation using pre-allocated arrays."""
         try:
-            all_predictions = [[] for _ in self.ensemble_models]
-            actual_targets = []
-            batch_count = 0
+            # First pass: count total samples to pre-allocate arrays
+            total_samples = 0
+            batch_sizes = []
+            for _, y_batch in dataset:
+                batch_size = y_batch.shape[0]
+                batch_sizes.append(batch_size)
+                total_samples += batch_size
 
-            # Process dataset in a single pass - no counting needed
+            if total_samples == 0:
+                self.logger.error("Empty dataset provided")
+                return np.array([]), np.array([])
+
+            # Pre-allocate arrays for efficiency (avoid list.extend() overhead)
+            n_models = len(self.ensemble_models)
+            all_predictions = np.zeros((n_models, total_samples), dtype=np.float32)
+            actual_targets = np.zeros(total_samples, dtype=np.float32)
+
+            # Second pass: fill arrays in-place
+            offset = 0
+            batch_count = 0
             for X_batch, y_batch in dataset:
                 batch_count += 1
+                batch_size = y_batch.shape[0]
 
                 # Get predictions from all models for this batch
                 for idx, model in enumerate(self.ensemble_models):
                     try:
                         pred = model.predict(X_batch, verbose=0)
-                        all_predictions[idx].extend(pred.flatten())
+                        all_predictions[idx, offset:offset + batch_size] = pred.flatten()
                     except Exception as e:
                         self.logger.error(f"Error in model {idx} prediction: {str(e)}")
-                        # Pad with zeros to maintain alignment
-                        all_predictions[idx].extend([0.0] * len(y_batch))
+                        # Zeros already pre-filled, no action needed
 
-                # Collect targets
-                actual_targets.extend(y_batch.numpy().flatten())
+                # Collect targets (in-place assignment)
+                actual_targets[offset:offset + batch_size] = y_batch.numpy().flatten()
+                offset += batch_size
 
                 # Log progress every 50 batches
                 if batch_count % 50 == 0:
                     self.logger.info(f"Processed {batch_count} batches for meta features")
 
-            if batch_count == 0:
-                self.logger.error("Empty dataset provided")
-                return np.array([]), np.array([])
-
-            # Convert to numpy arrays and transpose
-            meta_features = np.array(all_predictions).T
-            actual_targets = np.array(actual_targets)
+            # Transpose to get shape (samples, n_models)
+            meta_features = all_predictions.T
 
             self.logger.info(f"Final meta features shape: {meta_features.shape}")
             self.logger.info(f"Total batches processed: {batch_count}")
@@ -375,20 +418,11 @@ class EnsembleModel:
             meta_train = tf.where(tf.math.is_finite(meta_train), meta_train, tf.zeros_like(meta_train))
             y_train = tf.where(tf.math.is_finite(y_train), y_train, tf.zeros_like(y_train))
 
-            # Add interaction features between base model predictions
+            # Add interaction features between base model predictions using helper function
             n_models = len(self.ensemble_models)
-            interaction_features = []
-            for i in range(n_models):
-                for j in range(i + 1, n_models):
-                    # Difference between models
-                    diff = meta_train[:, i] - meta_train[:, j]
-                    interaction_features.append(tf.expand_dims(diff, -1))
-                    # Ratio between models (with safety)
-                    ratio = meta_train[:, i] / (tf.abs(meta_train[:, j]) + 1e-7)
-                    interaction_features.append(tf.expand_dims(ratio, -1))
+            interaction_features = compute_interaction_features(meta_train, n_models)
 
-            if interaction_features:
-                interaction_features = tf.concat(interaction_features, axis=-1)
+            if interaction_features is not None:
                 meta_train_enhanced = tf.concat([meta_train, interaction_features], axis=-1)
             else:
                 meta_train_enhanced = meta_train
@@ -411,16 +445,9 @@ class EnsembleModel:
                 meta_val = tf.where(tf.math.is_finite(meta_val), meta_val, tf.zeros_like(meta_val))
                 y_val = tf.where(tf.math.is_finite(y_val), y_val, tf.zeros_like(y_val))
 
-                # Add interaction features for validation
+                # Add interaction features for validation using helper function
                 if interaction_features is not None:
-                    val_interaction_features = []
-                    for i in range(n_models):
-                        for j in range(i + 1, n_models):
-                            diff = meta_val[:, i] - meta_val[:, j]
-                            val_interaction_features.append(tf.expand_dims(diff, -1))
-                            ratio = meta_val[:, i] / (tf.abs(meta_val[:, j]) + 1e-7)
-                            val_interaction_features.append(tf.expand_dims(ratio, -1))
-                    val_interaction_features = tf.concat(val_interaction_features, axis=-1)
+                    val_interaction_features = compute_interaction_features(meta_val, n_models)
                     meta_val_enhanced = tf.concat([meta_val, val_interaction_features], axis=-1)
                 else:
                     meta_val_enhanced = meta_val

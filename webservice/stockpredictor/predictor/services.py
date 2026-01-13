@@ -13,7 +13,7 @@ from django.conf import settings
 from typing import List, Dict, Optional, Tuple
 
 from .models import Stock, StockData, StockPrediction
-from .models import Stock, StockPrice, StockPrediction
+from django.db.models import OuterRef, Subquery, F
 
 # Import from shared module
 import sys
@@ -363,34 +363,45 @@ class TopStocksService:
                 except Exception as cache_error:
                     logger.warning(f"Cache error: {cache_error}")
 
-            # Get all active stocks
-            stocks = Stock.objects.all()
+            # Batch fetch all latest predictions in a single query using subquery
+            # This eliminates the N+1 query pattern
+            latest_prediction_subquery = StockPrediction.objects.filter(
+                stock=OuterRef('pk')
+            ).order_by('-prediction_date').values('pk')[:1]
+
+            # Get all predictions with their stock data in one query
+            latest_predictions = StockPrediction.objects.filter(
+                pk__in=Subquery(
+                    StockPrediction.objects.filter(
+                        stock=OuterRef('stock')
+                    ).order_by('-prediction_date').values('pk')[:1]
+                )
+            ).select_related('stock').filter(
+                current_price__isnull=False
+            )
+
             predictions = []
-
-            # Get predictions for each stock
-            for stock in stocks:
+            for prediction in latest_predictions:
                 try:
-                    prediction = self.prediction_service.get_latest_prediction(stock.ticker)
-                    if prediction and prediction.current_price:
-                        current_price = float(prediction.current_price)
-                        predicted_price = float(prediction.predicted_price)
-                        price_change = predicted_price - current_price
+                    current_price = float(prediction.current_price)
+                    predicted_price = float(prediction.predicted_price)
+                    price_change = predicted_price - current_price
 
-                        # Safe division for percentage calculation
-                        price_change_percent = safe_division(
-                            price_change, current_price, default=0.0
-                        ) * 100
+                    # Safe division for percentage calculation
+                    price_change_percent = safe_division(
+                        price_change, current_price, default=0.0
+                    ) * 100
 
-                        predictions.append({
-                            'ticker': stock.ticker,
-                            'current_price': current_price,
-                            'predicted_price': predicted_price,
-                            'price_change': price_change,
-                            'price_change_percent': round(price_change_percent, 2),
-                            'confidence_score': float(prediction.confidence_score)
-                        })
+                    predictions.append({
+                        'ticker': prediction.stock.ticker,
+                        'current_price': current_price,
+                        'predicted_price': predicted_price,
+                        'price_change': price_change,
+                        'price_change_percent': round(price_change_percent, 2),
+                        'confidence_score': float(prediction.confidence_score)
+                    })
                 except Exception as stock_error:
-                    logger.warning(f"Error processing stock {stock.ticker}: {stock_error}")
+                    logger.warning(f"Error processing prediction for {prediction.stock.ticker}: {stock_error}")
                     continue
 
             # Sort by absolute price change percentage

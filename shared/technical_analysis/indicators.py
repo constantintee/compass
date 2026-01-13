@@ -128,16 +128,22 @@ class TechnicalIndicators:
 
     def _calculate_base_indicators(self, data: pd.DataFrame) -> pd.DataFrame:
         """Calculate base technical indicators using talipp."""
-        # Initialize OHLCV objects
+        # Initialize OHLCV objects using numpy arrays (faster than iterrows)
+        opens = data['open'].values
+        highs = data['high'].values
+        lows = data['low'].values
+        closes = data['close'].values
+        volumes = data['volume'].values
+
         ohlcv_data = [
             OHLCV(
-                open=float(row['open']),
-                high=float(row['high']),
-                low=float(row['low']),
-                close=float(row['close']),
-                volume=float(row['volume'])
+                open=float(opens[i]),
+                high=float(highs[i]),
+                low=float(lows[i]),
+                close=float(closes[i]),
+                volume=float(volumes[i])
             )
-            for _, row in data.iterrows()
+            for i in range(len(data))
         ]
 
         # Initialize indicators
