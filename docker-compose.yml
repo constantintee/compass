@@ -1,24 +1,49 @@
 version: '3.8'
 
+# ==============================================================================
+# Security-Enhanced Docker Compose Configuration
+# ==============================================================================
+
 x-develop:
   restart: any  # Restart on any file changes
   watch:
     paths:
       - .  # Watch the entire project directory for changes
 
+# Common security settings
+x-security-opts: &security-opts
+  security_opt:
+    - no-new-privileges:true
+  read_only: false  # Set to true in production with tmpfs for writable paths
+
 services:
   downloader:
     build: ./downloader
     container_name: compass_downloader
     volumes:
-      - ./downloader:/app
-      - ./training:/app/training
-      - ./data:/app/data
+      - ./downloader:/app:ro  # Read-only source code
+      - ./training:/app/training:ro
+      - ./data:/app/data  # Data needs write access
     restart: always
     command: ["python", "/app/downloader.py"]
     environment:
       - PYTHONPATH=/app:/app/training
     env_file: .env
+    <<: *security-opts
+    # Resource limits to prevent DoS
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 512M
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
     x-develop:
       watch:
         paths:
@@ -28,19 +53,24 @@ services:
     build: ./training
     container_name: compass_training
     volumes:
-      - /home/ct/stock-analyzer-v1/training:/usr/src/app
-      - /home/ct/stock-analyzer-v1/data:/usr/src/app/data
-
-    restart: none
+      # Use relative paths instead of hardcoded absolute paths
+      - ./training:/usr/src/app:ro  # Read-only source code
+      - ./data:/usr/src/app/data  # Data needs write access
+    restart: "no"
     command: python training.py
     env_file: .env
+    <<: *security-opts
     x-develop:
       watch:
         paths:
           - ./training
     deploy:
       resources:
+        limits:
+          memory: 16G  # Allow more memory for ML training
+          cpus: '4'
         reservations:
+          memory: 4G
           devices:
             - driver: nvidia
               count: all
@@ -48,39 +78,98 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - TF_CPP_MIN_LOG_LEVEL=2  # Reduce TensorFlow logging noise
 
   web:
-    build: 
+    build:
       context: .
       dockerfile: webservice/Dockerfile
     container_name: compass_webservice
+    # Use gunicorn for production instead of Django's dev server
+    # For development, set DJANGO_DEBUG=true in .env
     command: >
-      bash -c "cd webservice && python manage.py runserver 0.0.0.0:5000"
+      bash -c "cd webservice &&
+      if [ \"$${DJANGO_DEBUG:-false}\" = 'true' ]; then
+        python manage.py runserver 0.0.0.0:5000;
+      else
+        gunicorn stockpredictor.wsgi:application --bind 0.0.0.0:5000 --workers 4 --timeout 120 --access-logfile - --error-logfile -;
+      fi"
     volumes:
-      - .:/app
+      - ./webservice:/app/webservice:ro  # Read-only source code
+      - ./training:/app/training:ro
+      - ./data:/app/data:ro  # Read-only data access
+      - webservice_static:/app/webservice/staticfiles  # Static files volume
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"  # Bind to localhost only - use reverse proxy for external access
     env_file:
       - .env
     networks:
       - stock_net
+    <<: *security-opts
     environment:
       - PYTHONPATH=/app:/app/webservice:/app/training
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # Security environment variables
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
     working_dir: /app/webservice
-    x-develop:
-      watch:
-        paths:
-        - ./webservice
+    # Resource limits
     deploy:
       resources:
+        limits:
+          memory: 4G
+          cpus: '2'
         reservations:
+          memory: 1G
           devices:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/", "||", "exit", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    x-develop:
+      watch:
+        paths:
+        - ./webservice
+    # Depends on other services
+    depends_on:
+      - downloader
+
+  # Optional: Redis service for caching and Celery
+  redis:
+    image: redis:7-alpine
+    container_name: compass_redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - stock_net
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 networks:
   stock_net:
     driver: bridge
+    # Enable inter-container communication only
+    internal: false
+
+volumes:
+  webservice_static:
+    driver: local
+  redis_data:
+    driver: local

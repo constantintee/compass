@@ -1,4 +1,8 @@
 # downloader.py
+"""
+Stock data downloader with security and input validation.
+Downloads historical stock data from multiple sources with retry mechanism.
+"""
 import psycopg2
 from psycopg2 import sql, pool
 from psycopg2.extras import RealDictCursor
@@ -7,9 +11,9 @@ import pandas as pd
 import numpy as np
 import sys
 import os
+import re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import time
-#from datetime import datetime, timedelta
 import logging
 import requests
 import yaml
@@ -23,11 +27,73 @@ from io import StringIO
 import urllib.parse
 import traceback
 from dotenv import load_dotenv
+from typing import Optional, Tuple
 
 # Import from shared module
 from shared.technical_analysis import TechnicalAnalysis, AdvancedElliottWaveAnalysis
 from shared.preprocessing import Preprocessor
 from shared.constants import ValidationThresholds, RetryConfig
+
+# Security constants
+MAX_TICKER_LENGTH = 15
+TICKER_PATTERN = re.compile(r'^[A-Za-z0-9\-\.]+$')
+MAX_REQUEST_TIMEOUT = 30  # seconds
+DEFAULT_REQUEST_TIMEOUT = 10  # seconds
+
+
+def validate_ticker(ticker: str) -> Tuple[bool, str]:
+    """
+    Validate a stock ticker symbol for security.
+
+    Args:
+        ticker: The ticker symbol to validate
+
+    Returns:
+        Tuple of (is_valid, sanitized_ticker or error_message)
+    """
+    if not ticker or not isinstance(ticker, str):
+        return False, "Ticker must be a non-empty string"
+
+    ticker = ticker.strip()
+
+    if len(ticker) > MAX_TICKER_LENGTH:
+        return False, f"Ticker must be {MAX_TICKER_LENGTH} characters or less"
+
+    if not TICKER_PATTERN.match(ticker):
+        return False, "Ticker contains invalid characters"
+
+    return True, ticker.upper()
+
+
+def validate_path(path: str, base_dir: str = None) -> Tuple[bool, str]:
+    """
+    Validate and sanitize file paths to prevent path traversal attacks.
+
+    Args:
+        path: The path to validate
+        base_dir: Optional base directory to restrict paths to
+
+    Returns:
+        Tuple of (is_valid, sanitized_path or error_message)
+    """
+    if not path:
+        return False, "Path cannot be empty"
+
+    # Normalize the path
+    normalized = os.path.normpath(path)
+
+    # Check for path traversal attempts
+    if '..' in normalized:
+        return False, "Path traversal detected"
+
+    # If base_dir specified, ensure path is within it
+    if base_dir:
+        base_abs = os.path.abspath(base_dir)
+        path_abs = os.path.abspath(normalized)
+        if not path_abs.startswith(base_abs):
+            return False, "Path outside allowed directory"
+
+    return True, normalized
 
 
 def load_config(config_path: str) -> dict:
@@ -111,6 +177,9 @@ class StockDataPipeline:
     def init_connection_pool(self):
         """Initialize PostgreSQL connection pool with TimescaleDB support"""
         try:
+            # Get connection timeout from config (default 30 seconds)
+            connect_timeout = self.config.get('databasepsql', {}).get('connect_timeout', 30)
+
             self.connection_pool = pool.SimpleConnectionPool(
                 minconn=1,
                 maxconn=10,
@@ -118,7 +187,11 @@ class StockDataPipeline:
                 port=self.config['databasepsql']['port'],
                 user=self.config['databasepsql']['user'],
                 password=self.config['databasepsql']['password'],
-                dbname=self.config['databasepsql']['dbname']
+                dbname=self.config['databasepsql']['dbname'],
+                connect_timeout=connect_timeout,
+                # Use SSL if configured (recommended for production)
+                sslmode=self.config.get('databasepsql', {}).get('sslmode', 'prefer'),
+                options='-c statement_timeout=60000'  # 60 second statement timeout
             )
             self.logger.info("Connection pool created successfully")
         except Exception as e:
@@ -213,6 +286,13 @@ class StockDataPipeline:
 
     def fetch_and_process_data(self, ticker: str) -> bool:
         """Main processing pipeline for a single ticker"""
+        # Validate ticker before processing
+        is_valid, result = validate_ticker(ticker)
+        if not is_valid:
+            self.logger.error(f"Invalid ticker '{ticker}': {result}")
+            return False
+        ticker = result  # Use sanitized ticker
+
         training_config = self.config.get('training', {})
 
         # Initialize Preprocessor
@@ -223,8 +303,12 @@ class StockDataPipeline:
             logger=self.logger
         )
 
-        # Directory setup
+        # Directory setup with path validation
         individual_tfrecord_path = "data/memory/individual_tfrecords"
+        is_valid_path, path_result = validate_path(individual_tfrecord_path, base_dir="data")
+        if not is_valid_path:
+            self.logger.error(f"Invalid path: {path_result}")
+            return False
         os.makedirs(individual_tfrecord_path, exist_ok=True)
         
         try:
@@ -519,7 +603,17 @@ class StockDataPipeline:
         for attempt in range(max_retries):
             try:
                 self.logger.info(f"Fetching {ticker} from Stooq. Attempt {attempt + 1}/{max_retries}")
-                response = requests.get(url, timeout=10)
+                # Use configurable timeout and enable SSL verification
+                timeout = self.config.get('request_timeout', DEFAULT_REQUEST_TIMEOUT)
+                response = requests.get(
+                    url,
+                    timeout=min(timeout, MAX_REQUEST_TIMEOUT),
+                    verify=True,  # Enable SSL certificate verification
+                    headers={
+                        'User-Agent': 'StockAnalyzer/1.0',
+                        'Accept': 'text/csv'
+                    }
+                )
                 
                 if response.status_code != 200:
                     self.logger.warning(f"Stooq returned status code {response.status_code} for {ticker}")

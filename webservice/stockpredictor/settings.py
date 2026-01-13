@@ -1,5 +1,6 @@
 # webservice/stockpredictor/settings.py
 import os
+import secrets
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -10,13 +11,28 @@ PROJECT_ROOT = BASE_DIR.parent
 # Load environment variables
 load_dotenv(PROJECT_ROOT / '.env')
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key-here')
+# SECURITY: Secret key must be set in environment for production
+# Generate a secure random key if not set (only for development)
+_default_secret_key = os.getenv('SECRET_KEY')
+if not _default_secret_key:
+    import warnings
+    warnings.warn(
+        "SECRET_KEY not set in environment. Using generated key. "
+        "Set SECRET_KEY environment variable for production!",
+        RuntimeWarning
+    )
+    _default_secret_key = secrets.token_urlsafe(50)
+
+SECRET_KEY = _default_secret_key
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'False') == 'True'
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
-ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost 127.0.0.1').split(' ')
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv('ALLOWED_HOSTS', 'localhost 127.0.0.1').split(' ')
+    if host.strip()
+]
 
 # Application definition
 INSTALLED_APPS = [
@@ -150,3 +166,64 @@ LOGGING = {
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# =============================================================================
+# SECURITY SETTINGS
+# =============================================================================
+
+# CSRF Settings
+CSRF_COOKIE_SECURE = not DEBUG  # Use secure cookies in production
+CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SAMESITE = 'Lax'
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(' ')
+    if origin.strip()
+]
+
+# Session Security
+SESSION_COOKIE_SECURE = not DEBUG  # Use secure cookies in production
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_AGE = 3600  # 1 hour session timeout
+SESSION_EXPIRE_AT_BROWSER_CLOSE = True
+
+# Security Headers
+SECURE_BROWSER_XSS_FILTER = True
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = 'DENY'
+
+# HTTPS settings (enable in production)
+if not DEBUG:
+    SECURE_SSL_REDIRECT = os.getenv('SECURE_SSL_REDIRECT', 'True').lower() == 'true'
+    SECURE_HSTS_SECONDS = int(os.getenv('SECURE_HSTS_SECONDS', '31536000'))  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Content Security Policy (CSP) - Add if using django-csp
+# CSP_DEFAULT_SRC = ("'self'",)
+# CSP_SCRIPT_SRC = ("'self'",)
+# CSP_STYLE_SRC = ("'self'", "'unsafe-inline'")
+
+# Rate limiting settings (for use with django-ratelimit or similar)
+RATELIMIT_ENABLE = os.getenv('RATELIMIT_ENABLE', 'True').lower() == 'true'
+RATELIMIT_DEFAULT = os.getenv('RATELIMIT_DEFAULT', '100/h')
+
+# =============================================================================
+# INPUT VALIDATION SETTINGS
+# =============================================================================
+
+# Maximum ticker length for validation
+MAX_TICKER_LENGTH = 15
+
+# Allowed ticker characters (alphanumeric, dash, dot)
+TICKER_PATTERN = r'^[A-Za-z0-9\-\.]+$'
+
+# Maximum search query length
+MAX_SEARCH_QUERY_LENGTH = 100
+
+# Cache timeout settings (in seconds)
+CACHE_TIMEOUT_PREDICTION = 300  # 5 minutes
+CACHE_TIMEOUT_TOP_STOCKS = 600  # 10 minutes
+CACHE_TIMEOUT_INDICATORS = 300  # 5 minutes
