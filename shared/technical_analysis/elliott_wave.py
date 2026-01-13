@@ -347,9 +347,16 @@ class AdvancedElliottWaveAnalysis:
             prev_price = None
             prev_date = None
 
-            for index, row in window.iterrows():
-                current_price = row['ZigZag']
-                current_date = index
+            # Use itertuples() for better performance than iterrows()
+            # Pre-extract arrays for faster access
+            zigzag_vals = window['ZigZag'].values
+            high_vals = window['high'].values if 'high' in window.columns else zigzag_vals
+            low_vals = window['low'].values if 'low' in window.columns else zigzag_vals
+            indices = window.index
+
+            for i in range(len(window)):
+                current_price = zigzag_vals[i]
+                current_date = indices[i]
 
                 if prev_price is not None and prev_date is not None:
                     if pd.isna(current_price) or pd.isna(prev_price):
@@ -373,8 +380,8 @@ class AdvancedElliottWaveAnalysis:
                 pattern['points'].append({
                     'date': current_date,
                     'price': current_price,
-                    'high': row.get('high', current_price),
-                    'low': row.get('low', current_price)
+                    'high': high_vals[i] if not pd.isna(high_vals[i]) else current_price,
+                    'low': low_vals[i] if not pd.isna(low_vals[i]) else current_price
                 })
 
                 prev_price = current_price

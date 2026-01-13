@@ -64,7 +64,8 @@ def validate_ticker_param(view_func):
 @handle_view_exceptions
 def index(request):
     """Main index page displaying top stocks."""
-    top_stocks = Stock.objects.all()[:10]
+    # Use only() to fetch just the fields needed for display
+    top_stocks = Stock.objects.only('ticker', 'company_name', 'market_cap')[:10]
     return render(request, 'index.html', {'stocks': top_stocks})
 
 
@@ -86,9 +87,9 @@ def get_prediction(request, ticker):
     prediction = cache.get(cache_key)
 
     if not prediction:
-        stock = Stock.objects.get(ticker=ticker)
-        prediction = StockPrediction.objects.filter(
-            stock=stock
+        # Use select_related to fetch stock in single query, filter by ticker directly
+        prediction = StockPrediction.objects.select_related('stock').filter(
+            stock__ticker=ticker
         ).order_by('-prediction_date').first()
 
         if prediction:
@@ -133,9 +134,9 @@ def refresh_prediction(request, ticker):
 @handle_view_exceptions
 def get_prediction_graph(request, ticker):
     """Get prediction graph data for a ticker."""
-    stock = Stock.objects.get(ticker=ticker)
-    predictions = StockPrediction.objects.filter(
-        stock=stock
+    # Use select_related and filter by ticker directly to avoid N+1 query
+    predictions = StockPrediction.objects.select_related('stock').filter(
+        stock__ticker=ticker
     ).order_by('-prediction_date')[:30]
 
     return render(request, 'components/prediction_graph.html', {
@@ -149,9 +150,9 @@ def get_prediction_graph(request, ticker):
 @handle_view_exceptions
 def prediction_history(request, ticker):
     """Get prediction history for a ticker."""
-    stock = Stock.objects.get(ticker=ticker)
-    predictions = StockPrediction.objects.filter(
-        stock=stock
+    # Use select_related and filter by ticker directly to avoid N+1 query
+    predictions = StockPrediction.objects.select_related('stock').filter(
+        stock__ticker=ticker
     ).order_by('-prediction_date')[:100]
 
     return render(request, 'components/prediction_chart.html', {
@@ -168,9 +169,14 @@ def get_top_stocks(request):
     stocks = cache.get(cache_key)
 
     if not stocks:
-        stocks = Stock.objects.all().order_by('-market_cap')[:20]
+        # Use only() to fetch just needed fields, avoid fetching all columns
+        stocks = Stock.objects.only(
+            'ticker', 'company_name', 'market_cap', 'sector'
+        ).order_by('-market_cap')[:20]
         cache_timeout = getattr(settings, 'CACHE_TIMEOUT_TOP_STOCKS', 600)
-        cache.set(cache_key, list(stocks), cache_timeout)
+        # Use values() for efficient serialization instead of list() on model instances
+        stocks = list(stocks.values('ticker', 'company_name', 'market_cap', 'sector'))
+        cache.set(cache_key, stocks, cache_timeout)
 
     return render(request, 'widgets/stock_summary.html', {'stocks': stocks})
 
@@ -218,22 +224,22 @@ def get_technical_indicators(request, ticker):
 @handle_view_exceptions
 def market_stats(request, ticker):
     """Get market statistics for a ticker."""
-    stock = Stock.objects.get(ticker=ticker)
-    stock_data = StockData.objects.filter(
-        stock=stock
-    ).order_by('-date')[:60]
+    # Use select_related to fetch stock data with stock in single query
+    stock_data = StockData.objects.select_related('stock').filter(
+        stock__ticker=ticker
+    ).order_by('-date')[:1]  # Only need latest record
 
     stats = {}
-    if stock_data.exists():
-        latest = stock_data.first()
+    latest = stock_data.first()
+    if latest:
         stats = {
             'current_price': latest.close,
             'high': latest.high,
             'low': latest.low,
             'volume': latest.volume,
-            'market_cap': stock.market_cap,
-            'sector': stock.sector,
-            'industry': stock.industry,
+            'market_cap': latest.stock.market_cap,
+            'sector': latest.stock.sector,
+            'industry': latest.stock.industry,
         }
 
     return render(request, 'components/market_stats.html', {
@@ -278,25 +284,31 @@ def get_stock_data(request, ticker):
     data = cache.get(cache_key)
 
     if not data:
+        # Use values() with specific fields for efficient serialization
         stock_data = StockData.objects.filter(
             stock__ticker=ticker
-        ).order_by('-date')[:60]
+        ).order_by('-date').values(
+            'date', 'open', 'high', 'low', 'close', 'volume',
+            'rsi', 'macd', 'macd_signal', 'macd_hist',
+            'ema_12', 'ema_26', 'bb_upper', 'bb_middle', 'bb_lower'
+        )[:60]
 
-        if not stock_data.exists():
+        stock_data_list = list(stock_data)
+        if not stock_data_list:
             return render(request, 'components/stock_card.html', {
                 'data': None,
                 'ticker': ticker,
                 'error': 'No data available'
             })
 
-        # Get latest data safely
-        latest = stock_data.first()
+        # Get latest data from the list (already fetched)
+        latest = stock_data_list[0]
 
         data = {
-            'price_data': list(stock_data.values()),
+            'price_data': stock_data_list,
             'technical_indicators': {
-                'rsi': latest.rsi if latest else None,
-                'macd': latest.macd if latest else None,
+                'rsi': latest.get('rsi'),
+                'macd': latest.get('macd'),
             }
         }
 

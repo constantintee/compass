@@ -271,16 +271,33 @@ class TechnicalAnalysis:
                 ON CONFLICT (version) DO NOTHING;
                 """, (self.current_version, config_hash, json.dumps(config)))
 
-                # Prepare data for batch insertion
-                records = []
+                # Prepare data for batch insertion using vectorized approach
                 metadata = {
                     'config_hash': config_hash,
                     'calculation_parameters': config
                 }
+                metadata_json = json.dumps(metadata)
 
-                for index, row in data.iterrows():
-                    record = (ticker, index, self.current_version, *self._prepare_record(row), json.dumps(metadata))
-                    records.append(record)
+                # Define columns for extraction (matching _get_insert_sql column order)
+                indicator_columns = [
+                    'EMA_12', 'EMA_26', 'MACD', 'MACD_Signal', 'MACD_Histogram',
+                    'RSI', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'CCI', 'ATR',
+                    'SuperTrend', 'SuperTrend_Direction', 'ZigZag', 'ZigZag_Highs', 'ZigZag_Lows',
+                    'Support', 'Resistance', 'Elliott_Wave', 'Wave_Degree', 'Wave_Type',
+                    'Wave_Number', 'Wave_Confidence'
+                ]
+
+                # Use itertuples() which is ~100x faster than iterrows()
+                records = [
+                    (
+                        ticker,
+                        row.Index,
+                        self.current_version,
+                        *[getattr(row, col, None) if col in data.columns else None for col in indicator_columns],
+                        metadata_json
+                    )
+                    for row in data.itertuples()
+                ]
 
                 # Use efficient batch insertion
                 extras.execute_batch(cursor, self._get_insert_sql(), records)
@@ -376,16 +393,22 @@ class TechnicalAnalysis:
             # Calculate support and resistance first
             support_resistance_df = self.calculate_support_resistance(data)
 
-            # Initialize OHLCV objects
+            # Initialize OHLCV objects using numpy arrays (faster than iterrows)
+            opens = data['open'].values
+            highs = data['high'].values
+            lows = data['low'].values
+            closes = data['close'].values
+            volumes = data['volume'].values
+
             ohlcv_data = [
                 OHLCV(
-                    open=float(row['open']),
-                    high=float(row['high']),
-                    low=float(row['low']),
-                    close=float(row['close']),
-                    volume=float(row['volume'])
+                    open=float(opens[i]),
+                    high=float(highs[i]),
+                    low=float(lows[i]),
+                    close=float(closes[i]),
+                    volume=float(volumes[i])
                 )
-                for _, row in data.iterrows()
+                for i in range(len(data))
             ]
             
             # Create OHLCV objects using OHLCVFactory
@@ -870,10 +893,15 @@ class AdvancedElliottWaveAnalysis:
         Extract potential Elliott Wave patterns from swing points.
         """
         wave_patterns = []
-        
+
+        # Pre-extract arrays for faster access
+        zigzag_vals = swing_points['ZigZag'].values
+        indices = swing_points.index
+
         for i in range(len(swing_points) - 4):
-            window = swing_points.iloc[i:i+5]
-            
+            window_indices = indices[i:i+5]
+            window_zigzag = zigzag_vals[i:i+5]
+
             pattern = {
                 'points': [],
                 'directions': [],
@@ -881,32 +909,36 @@ class AdvancedElliottWaveAnalysis:
                 'support_levels': [],
                 'resistance_levels': []
             }
-            
-            prev_point = None
-            for idx, point in window.iterrows():
-                if prev_point is not None:
-                    direction = 1 if point['ZigZag'] > prev_point['ZigZag'] else -1
-                    magnitude = abs(point['ZigZag'] - prev_point['ZigZag'])
-                    
+
+            prev_zigzag = None
+            # Use index-based iteration instead of iterrows()
+            for j in range(len(window_indices)):
+                idx = window_indices[j]
+                current_zigzag = window_zigzag[j]
+
+                if prev_zigzag is not None:
+                    direction = 1 if current_zigzag > prev_zigzag else -1
+                    magnitude = abs(current_zigzag - prev_zigzag)
+
                     pattern['points'].append({
                         'date': idx,
-                        'price': point['ZigZag'],
+                        'price': current_zigzag,
                         'type': 'HIGH' if direction > 0 else 'LOW'
                     })
                     pattern['directions'].append(direction)
                     pattern['magnitudes'].append(magnitude)
-                    
+
                     # Add support/resistance levels for validation
                     pattern['support_levels'].append(support_resistance.loc[idx, 'Support'])
                     pattern['resistance_levels'].append(support_resistance.loc[idx, 'Resistance'])
-                
-                prev_point = point
-            
+
+                prev_zigzag = current_zigzag
+
             if self.is_valid_wave_pattern(pattern):
                 pattern['degree'] = self.determine_wave_degree(pattern)
                 pattern['type'] = self.classify_wave_type(pattern)
                 wave_patterns.append(pattern)
-        
+
         return wave_patterns
 
     def is_valid_wave_pattern(self, pattern: Dict) -> bool:
@@ -1569,9 +1601,15 @@ class AdvancedElliottWaveAnalysis:
             prev_price = None
             prev_date = None
 
-            for index, row in window.iterrows():
-                current_price = row['ZigZag']
-                current_date = index
+            # Use numpy arrays for faster iteration (instead of iterrows)
+            zigzag_vals = window['ZigZag'].values
+            high_vals = window['high'].values if 'high' in window.columns else zigzag_vals
+            low_vals = window['low'].values if 'low' in window.columns else zigzag_vals
+            indices = window.index
+
+            for i in range(len(window)):
+                current_price = zigzag_vals[i]
+                current_date = indices[i]
 
                 if prev_price is not None and prev_date is not None:
                     # Validate prices
@@ -1584,7 +1622,7 @@ class AdvancedElliottWaveAnalysis:
                     # Get momentum and volume data for the period
                     period_mask = (data.index >= prev_date) & (data.index <= current_date)
                     period_data = data.loc[period_mask]
-                    
+
                     rsi = period_data['RSI'].mean() if 'RSI' in period_data else None
                     volume = period_data['volume'].mean() if not period_data['volume'].empty else None
 
@@ -1598,8 +1636,8 @@ class AdvancedElliottWaveAnalysis:
                 pattern['points'].append({
                     'date': current_date,
                     'price': current_price,
-                    'high': row.get('high', current_price),
-                    'low': row.get('low', current_price)
+                    'high': high_vals[i] if not pd.isna(high_vals[i]) else current_price,
+                    'low': low_vals[i] if not pd.isna(low_vals[i]) else current_price
                 })
 
                 prev_price = current_price
@@ -1638,21 +1676,30 @@ class AdvancedElliottWaveAnalysis:
         try:
             subwaves = []
             min_points = 3  # Minimum points needed for a subwave
-            
+
+            # Pre-extract arrays for faster access
+            zigzag_vals = window['ZigZag'].values
+            zigzag_highs = window['ZigZag_Highs'].values if 'ZigZag_Highs' in window.columns else zigzag_vals
+            indices = window.index
+
             for i in range(len(window) - min_points + 1):
                 sub_window = window.iloc[i:i+min_points]
-                
+
                 # Check if this forms a valid subwave
                 if self._is_valid_subwave(sub_window):
                     subwave = []
-                    for idx, row in sub_window.iterrows():
+                    # Use index-based iteration instead of iterrows()
+                    for j in range(min_points):
+                        idx = indices[i + j]
+                        zigzag = zigzag_vals[i + j]
+                        zigzag_high = zigzag_highs[i + j]
                         subwave.append({
                             'date': idx,
-                            'price': row['ZigZag'],
-                            'type': 'HIGH' if row['ZigZag_Highs'] == row['ZigZag'] else 'LOW'
+                            'price': zigzag,
+                            'type': 'HIGH' if zigzag_high == zigzag else 'LOW'
                         })
                     subwaves.append(subwave)
-            
+
             return subwaves
         except Exception as e:
             self.logger.error(f"Error identifying subwaves: {str(e)}")
