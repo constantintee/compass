@@ -200,6 +200,7 @@ class StockDataPipeline:
 
     def ensure_database_exists(self):
         """Ensure TimescaleDB and necessary tables exist"""
+        conn = None
         try:
             with self.db_lock:
                 conn = self.get_connection()
@@ -446,90 +447,82 @@ class StockDataPipeline:
             return False
 
     def store_data(self, ticker: str, data: pd.DataFrame) -> bool:
-        """Store processed data in TimescaleDB"""
+        """Store processed data in TimescaleDB using efficient batch insert."""
         conn = None
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
 
-            # Store data in chunks
-            chunk_size = 1000
-            total_chunks = len(data) // chunk_size + (1 if len(data) % chunk_size else 0)
+            # Prepare data using vectorized operations (much faster than iterrows)
+            data_copy = data.copy()
+            data_copy['ticker'] = ticker
 
-            for i in range(total_chunks):
-                start_idx = i * chunk_size
-                end_idx = min((i + 1) * chunk_size, len(data))
-                chunk = data.iloc[start_idx:end_idx]
+            # Fill missing indicator columns with defaults
+            default_cols = {
+                'RSI': 0.0, 'MACD': 0.0, 'MACD_Signal': 0.0, 'MACD_Hist': 0.0,
+                'EMA_12': 0.0, 'EMA_26': 0.0, 'BB_Upper': 0.0, 'BB_Middle': 0.0,
+                'BB_Lower': 0.0, 'elliott_wave_pattern': None, 'elliott_wave_degree': None,
+                'elliott_wave_position': 0, 'support_level': 0.0, 'resistance_level': 0.0
+            }
+            for col, default in default_cols.items():
+                if col not in data_copy.columns:
+                    data_copy[col] = default
 
-                # Prepare data for insertion
-                values = []
-                for idx, row in chunk.iterrows():
-                    values.append((
-                        ticker,
-                        idx,  # date is index
-                        float(row['Open']),
-                        float(row['High']),
-                        float(row['Low']),
-                        float(row['Close']),
-                        int(row['Volume']),
-                        float(row.get('RSI', 0)),
-                        float(row.get('MACD', 0)),
-                        float(row.get('MACD_Signal', 0)),
-                        float(row.get('MACD_Hist', 0)),
-                        float(row.get('EMA_12', 0)),
-                        float(row.get('EMA_26', 0)),
-                        float(row.get('BB_Upper', 0)),
-                        float(row.get('BB_Middle', 0)),
-                        float(row.get('BB_Lower', 0)),
-                        row.get('elliott_wave_pattern'),
-                        row.get('elliott_wave_degree'),
-                        int(row.get('elliott_wave_position', 0)),
-                        float(row.get('support_level', 0)),
-                        float(row.get('resistance_level', 0))
-                    ))
+            # Reset index to get date as a column
+            data_copy = data_copy.reset_index()
+            date_col = 'index' if 'index' in data_copy.columns else 'date'
 
-                # Bulk insert
-                cursor.executemany("""
-                    INSERT INTO stocks (
-                        ticker, date, open, high, low, close, volume,
-                        rsi, macd, macd_signal, macd_hist,
-                        ema_12, ema_26,
-                        bb_upper, bb_middle, bb_lower,
-                        elliott_wave_pattern, elliott_wave_degree, elliott_wave_position,
-                        support_level, resistance_level
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s,
-                        %s, %s,
-                        %s, %s, %s,
-                        %s, %s, %s,
-                        %s, %s
-                    )
-                    ON CONFLICT (ticker, date) 
-                    DO UPDATE SET
-                        open = EXCLUDED.open,
-                        high = EXCLUDED.high,
-                        low = EXCLUDED.low,
-                        close = EXCLUDED.close,
-                        volume = EXCLUDED.volume,
-                        rsi = EXCLUDED.rsi,
-                        macd = EXCLUDED.macd,
-                        macd_signal = EXCLUDED.macd_signal,
-                        macd_hist = EXCLUDED.macd_hist,
-                        ema_12 = EXCLUDED.ema_12,
-                        ema_26 = EXCLUDED.ema_26,
-                        bb_upper = EXCLUDED.bb_upper,
-                        bb_middle = EXCLUDED.bb_middle,
-                        bb_lower = EXCLUDED.bb_lower,
-                        elliott_wave_pattern = EXCLUDED.elliott_wave_pattern,
-                        elliott_wave_degree = EXCLUDED.elliott_wave_degree,
-                        elliott_wave_position = EXCLUDED.elliott_wave_position,
-                        support_level = EXCLUDED.support_level,
-                        resistance_level = EXCLUDED.resistance_level
-                """, values)
+            # Prepare column order for insertion
+            columns = [
+                'ticker', date_col, 'Open', 'High', 'Low', 'Close', 'Volume',
+                'RSI', 'MACD', 'MACD_Signal', 'MACD_Hist',
+                'EMA_12', 'EMA_26', 'BB_Upper', 'BB_Middle', 'BB_Lower',
+                'elliott_wave_pattern', 'elliott_wave_degree', 'elliott_wave_position',
+                'support_level', 'resistance_level'
+            ]
+
+            # Convert to list of tuples using vectorized operations
+            values = data_copy[columns].values.tolist()
+
+            # Use execute_values for efficient batch insert (5-10x faster than executemany)
+            from psycopg2.extras import execute_values
+
+            insert_sql = """
+                INSERT INTO stocks (
+                    ticker, date, open, high, low, close, volume,
+                    rsi, macd, macd_signal, macd_hist,
+                    ema_12, ema_26, bb_upper, bb_middle, bb_lower,
+                    elliott_wave_pattern, elliott_wave_degree, elliott_wave_position,
+                    support_level, resistance_level
+                ) VALUES %s
+                ON CONFLICT (ticker, date)
+                DO UPDATE SET
+                    open = EXCLUDED.open,
+                    high = EXCLUDED.high,
+                    low = EXCLUDED.low,
+                    close = EXCLUDED.close,
+                    volume = EXCLUDED.volume,
+                    rsi = EXCLUDED.rsi,
+                    macd = EXCLUDED.macd,
+                    macd_signal = EXCLUDED.macd_signal,
+                    macd_hist = EXCLUDED.macd_hist,
+                    ema_12 = EXCLUDED.ema_12,
+                    ema_26 = EXCLUDED.ema_26,
+                    bb_upper = EXCLUDED.bb_upper,
+                    bb_middle = EXCLUDED.bb_middle,
+                    bb_lower = EXCLUDED.bb_lower,
+                    elliott_wave_pattern = EXCLUDED.elliott_wave_pattern,
+                    elliott_wave_degree = EXCLUDED.elliott_wave_degree,
+                    elliott_wave_position = EXCLUDED.elliott_wave_position,
+                    support_level = EXCLUDED.support_level,
+                    resistance_level = EXCLUDED.resistance_level
+            """
+
+            # Use page_size for chunked insertion (memory efficient)
+            execute_values(cursor, insert_sql, values, page_size=1000)
 
             conn.commit()
-            self.logger.info(f"Successfully stored data for {ticker}")
+            self.logger.info(f"Successfully stored {len(values)} rows for {ticker}")
             return True
 
         except Exception as e:
@@ -537,6 +530,9 @@ class StockDataPipeline:
                 conn.rollback()
             self.logger.error(f"Error storing data for {ticker}: {str(e)}")
             return False
+        finally:
+            if conn:
+                self.return_connection(conn)
 
     def process_batch(self, tickers: list) -> None:
         """Process a batch of tickers in parallel"""

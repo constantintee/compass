@@ -7,13 +7,16 @@ import re
 import logging
 from typing import Tuple, Optional
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 logger = logging.getLogger(__name__)
 
 
-class ValidationError(Exception):
-    """Custom validation error with user-friendly messages."""
+class InputValidationError(Exception):
+    """Custom validation error with user-friendly messages.
+
+    Named differently from Django's ValidationError to avoid shadowing.
+    """
 
     def __init__(self, message: str, code: str = 'invalid'):
         self.message = message
@@ -174,6 +177,7 @@ def get_safe_error_message(exception: Exception, include_details: bool = False) 
     error_messages = {
         'DoesNotExist': 'The requested resource was not found',
         'ValidationError': 'Invalid input provided',
+        'InputValidationError': 'Invalid input provided',
         'PermissionDenied': 'Permission denied',
         'TimeoutError': 'The request timed out',
         'ConnectionError': 'Service temporarily unavailable',

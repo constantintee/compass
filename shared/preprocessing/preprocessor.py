@@ -95,6 +95,9 @@ class Preprocessor:
         """Create database connection pool with retry logic."""
         for attempt in range(max_retries):
             try:
+                # Use environment variable for SSL mode, default to 'prefer' for security
+                # In production, set DB_SSLMODE='require' or 'verify-full'
+                sslmode = os.getenv('DB_SSLMODE', 'prefer')
                 self.connection_pool = pool.SimpleConnectionPool(
                     minconn=DatabaseConfig.MIN_CONNECTIONS,
                     maxconn=DatabaseConfig.MAX_CONNECTIONS,
@@ -103,7 +106,7 @@ class Preprocessor:
                     user=self.db_user,
                     password=self.db_password,
                     dbname=self.db_name,
-                    sslmode='disable'
+                    sslmode=sslmode
                 )
                 self.logger.info("Database connection pool created successfully.")
                 return

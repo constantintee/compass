@@ -43,14 +43,40 @@ class TechnicalAnalysis:
         self._setup_db_connection()
 
     def _setup_db_connection(self) -> None:
-        """Setup database connection."""
+        """Setup database connection with credential validation."""
+        # Validate required environment variables
+        db_host = os.getenv('DB_HOST')
+        db_port = os.getenv('DB_PORT')
+        db_user = os.getenv('DB_USER')
+        db_password = os.getenv('DB_PASSWORD')
+        db_name = os.getenv('DB_NAME')
+
+        required_vars = {
+            'DB_HOST': db_host,
+            'DB_PORT': db_port,
+            'DB_USER': db_user,
+            'DB_PASSWORD': db_password,
+            'DB_NAME': db_name
+        }
+
+        missing_vars = [name for name, value in required_vars.items() if not value]
+        if missing_vars:
+            self.logger.error(
+                f"Missing required database environment variables: {', '.join(missing_vars)}"
+            )
+            self.db_connection = None
+            return
+
         try:
+            # Use SSL mode from environment, defaulting to 'prefer'
+            sslmode = os.getenv('DB_SSLMODE', 'prefer')
             self.db_connection = psycopg2.connect(
-                host=os.getenv('DB_HOST'),
-                port=os.getenv('DB_PORT'),
-                user=os.getenv('DB_USER'),
-                password=os.getenv('DB_PASSWORD'),
-                dbname=os.getenv('DB_NAME')
+                host=db_host,
+                port=db_port,
+                user=db_user,
+                password=db_password,
+                dbname=db_name,
+                sslmode=sslmode
             )
             self._get_current_version()
         except psycopg2.Error as e:

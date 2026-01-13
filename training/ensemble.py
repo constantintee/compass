@@ -378,6 +378,7 @@ class EnsembleModel:
             # Add interaction features between base model predictions
             n_models = len(self.ensemble_models)
             interaction_features = []
+            has_interaction_features = False
             for i in range(n_models):
                 for j in range(i + 1, n_models):
                     # Difference between models
@@ -390,6 +391,7 @@ class EnsembleModel:
             if interaction_features:
                 interaction_features = tf.concat(interaction_features, axis=-1)
                 meta_train_enhanced = tf.concat([meta_train, interaction_features], axis=-1)
+                has_interaction_features = True
             else:
                 meta_train_enhanced = meta_train
 
@@ -411,8 +413,8 @@ class EnsembleModel:
                 meta_val = tf.where(tf.math.is_finite(meta_val), meta_val, tf.zeros_like(meta_val))
                 y_val = tf.where(tf.math.is_finite(y_val), y_val, tf.zeros_like(y_val))
 
-                # Add interaction features for validation
-                if interaction_features is not None:
+                # Add interaction features for validation (only if training had them)
+                if has_interaction_features:
                     val_interaction_features = []
                     for i in range(n_models):
                         for j in range(i + 1, n_models):
