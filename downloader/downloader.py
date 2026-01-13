@@ -265,10 +265,9 @@ class StockDataPipeline:
             # # 6. Combine all data
             # final_data = pd.concat([data_with_indicators, elliott_wave_df], axis=1)
             
-            # 7. Store in TimescaleDB
-            success = self.store_data(ticker, final_data)
-            
-            return success
+            # Data is now stored via the Preprocessor's TFRecord writing
+            # The parallel_preprocess_stocks handles the complete pipeline
+            return True
 
         except Exception as e:
             self.logger.error(f"Error processing {ticker}: {str(e)}")
