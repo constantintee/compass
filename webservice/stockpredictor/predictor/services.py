@@ -8,7 +8,12 @@ from django.db.models import F, ExpressionWrapper, FloatField
 from typing import List, Dict, Optional
 
 from .models import Stock, StockPrice, StockPrediction
-from training.technical_analysis import TechnicalAnalysis
+
+# Import from shared module
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+from shared.technical_analysis import TechnicalAnalysis
 from training.models import BaseModel, LSTMModel
 from training.ensemble import EnsembleModel
 
