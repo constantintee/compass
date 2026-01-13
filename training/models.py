@@ -6,8 +6,9 @@ import sys
 import time
 import datetime
 from datetime import datetime, timedelta
-#import signal
-#import shutil
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
+import concurrent.futures
 import gc
 import psutil
 import traceback
@@ -560,6 +561,17 @@ class BaseModel:
                 optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer)
                 self.logger.info("Mixed precision training enabled")
             
+            # Get batch count from dataset cardinality or use provided total_batches
+            try:
+                cardinality = X.cardinality().numpy()
+                if cardinality == tf.data.INFINITE_CARDINALITY or cardinality == tf.data.UNKNOWN_CARDINALITY:
+                    # Use total_batches if provided, otherwise estimate
+                    estimated_batches = total_batches if total_batches else 1000
+                else:
+                    estimated_batches = cardinality
+            except Exception:
+                estimated_batches = total_batches if total_batches else 1000
+
             # Configure callbacks
             callbacks = [
                 CustomEarlyStopping(
@@ -591,7 +603,7 @@ class BaseModel:
                 PerformanceMonitorCallback(
                     self.logger,
                     batch_size,
-                    sum(1 for _ in X)  # Count batches in training dataset
+                    estimated_batches
                 )
             ]
             
