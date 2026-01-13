@@ -1,4 +1,5 @@
 # ensemble.py
+# Optimized ensemble with uncertainty estimation for best predictions
 
 import os
 import json
@@ -14,18 +15,40 @@ from sklearn.metrics import mean_absolute_error
 from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.layers import (
     Input, Dense, Dropout, LSTM, Flatten, LayerNormalization,
-    MultiHeadAttention, GlobalAveragePooling1D, BatchNormalization, Bidirectional, Activation)
-from tensorflow.keras.optimizers import Adam
+    MultiHeadAttention, GlobalAveragePooling1D, BatchNormalization,
+    Bidirectional, Activation, Add, Concatenate, GaussianNoise,
+    GaussianDropout, Layer)
+from tensorflow.keras.optimizers import Adam, AdamW
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
 from tensorflow.keras import backend as K
-from tensorflow.keras.regularizers import l2
+from tensorflow.keras.regularizers import l2, l1_l2
 
 from models import BaseModel, LSTMModel, TransformerModel, DenseModel
 from utils import MemoryMonitor, monitor_memory, log_memory_usage, clean_memory, get_memory_usage
-from models import SafeMSE, SafeMAE, PerformanceMonitorCallback
+from models import SafeMSE, SafeMAE, PerformanceMonitorCallback, CombinedLoss, HuberLoss
+
+
+# =============================================================================
+# MONTE CARLO DROPOUT LAYER FOR UNCERTAINTY ESTIMATION
+# =============================================================================
+
+class MCDropout(Layer):
+    """Monte Carlo Dropout - applies dropout during inference for uncertainty estimation."""
+    def __init__(self, rate=0.1, **kwargs):
+        super(MCDropout, self).__init__(**kwargs)
+        self.rate = rate
+
+    def call(self, inputs, training=None):
+        # Always apply dropout, even during inference
+        return tf.nn.dropout(inputs, rate=self.rate)
+
+    def get_config(self):
+        config = super(MCDropout, self).get_config()
+        config.update({'rate': self.rate})
+        return config
 
 
 class EnsembleModel:
@@ -324,97 +347,162 @@ class EnsembleModel:
             return np.array([]), np.array([])
 
     def train_meta_model(self, X, y, X_val, y_val, config):
-        """Train meta-model using configuration settings with robust NaN handling"""
+        """
+        Train advanced meta-model with:
+        - Deep architecture with residual connections
+        - Monte Carlo Dropout for uncertainty estimation
+        - Combined loss function
+        - Cross-validation stacking
+        """
         try:
             # Get training configuration
             training_config = config.get('training', {})
             batch_size = training_config.get('batch_size', 32)
-            epochs = training_config.get('epochs', 30)
-            learning_rate = training_config.get('learning_rate', 0.001)
-            
-            self.logger.info(f"Training meta-model with batch_size={batch_size}, epochs={epochs}")
-            
+            epochs = training_config.get('meta_epochs', 100)  # More epochs for meta-model
+            learning_rate = training_config.get('meta_learning_rate', 0.001)
+
+            self.logger.info(f"Training ADVANCED meta-model with batch_size={batch_size}, epochs={epochs}")
+
             # Prepare meta features
             self.logger.info("Preparing meta features for training data...")
             meta_train, y_train = self.prepare_meta_features(X)
-            
+
             if meta_train.size == 0:
                 self.logger.error("No training meta features generated")
                 return
-                
+
             # Replace any NaN/Inf values
             meta_train = tf.where(tf.math.is_finite(meta_train), meta_train, tf.zeros_like(meta_train))
             y_train = tf.where(tf.math.is_finite(y_train), y_train, tf.zeros_like(y_train))
-                
+
+            # Add interaction features between base model predictions
+            n_models = len(self.ensemble_models)
+            interaction_features = []
+            for i in range(n_models):
+                for j in range(i + 1, n_models):
+                    # Difference between models
+                    diff = meta_train[:, i] - meta_train[:, j]
+                    interaction_features.append(tf.expand_dims(diff, -1))
+                    # Ratio between models (with safety)
+                    ratio = meta_train[:, i] / (tf.abs(meta_train[:, j]) + 1e-7)
+                    interaction_features.append(tf.expand_dims(ratio, -1))
+
+            if interaction_features:
+                interaction_features = tf.concat(interaction_features, axis=-1)
+                meta_train_enhanced = tf.concat([meta_train, interaction_features], axis=-1)
+            else:
+                meta_train_enhanced = meta_train
+
             # Normalize features using tf operations
-            meta_mean = tf.reduce_mean(meta_train, axis=0)
-            meta_std = tf.math.reduce_std(meta_train, axis=0)
+            meta_mean = tf.reduce_mean(meta_train_enhanced, axis=0)
+            meta_std = tf.math.reduce_std(meta_train_enhanced, axis=0)
             meta_std = tf.where(meta_std == 0, tf.ones_like(meta_std), meta_std)
-            meta_train_scaled = (meta_train - meta_mean) / (meta_std + 1e-7)
-            
+            meta_train_scaled = (meta_train_enhanced - meta_mean) / (meta_std + 1e-7)
+
+            self.logger.info(f"Enhanced meta features shape: {meta_train_scaled.shape}")
+
             self.logger.info("Preparing meta features for validation data...")
             meta_val, y_val = self.prepare_meta_features(X_val)
-            
+
             if meta_val.size == 0:
                 self.logger.warning("No validation meta features generated, will train without validation")
                 meta_val_scaled, y_val_scaled = None, None
             else:
                 meta_val = tf.where(tf.math.is_finite(meta_val), meta_val, tf.zeros_like(meta_val))
                 y_val = tf.where(tf.math.is_finite(y_val), y_val, tf.zeros_like(y_val))
-                meta_val_scaled = (meta_val - meta_mean) / (meta_std + 1e-7)
-                y_val_scaled = y_val
 
-            n_models = len(self.ensemble_models)
-            if meta_train_scaled.shape[1] != n_models:
-                self.logger.error(f"Meta-features shape mismatch. Expected {n_models} features, got {meta_train_scaled.shape[1]}.")
-                return
+                # Add interaction features for validation
+                if interaction_features is not None:
+                    val_interaction_features = []
+                    for i in range(n_models):
+                        for j in range(i + 1, n_models):
+                            diff = meta_val[:, i] - meta_val[:, j]
+                            val_interaction_features.append(tf.expand_dims(diff, -1))
+                            ratio = meta_val[:, i] / (tf.abs(meta_val[:, j]) + 1e-7)
+                            val_interaction_features.append(tf.expand_dims(ratio, -1))
+                    val_interaction_features = tf.concat(val_interaction_features, axis=-1)
+                    meta_val_enhanced = tf.concat([meta_val, val_interaction_features], axis=-1)
+                else:
+                    meta_val_enhanced = meta_val
+
+                meta_val_scaled = (meta_val_enhanced - meta_mean) / (meta_std + 1e-7)
+                y_val_scaled = y_val
 
             try:
                 with self.strategy.scope():
-                    # Add input batch normalization
-                    inputs = tf.keras.Input(shape=(meta_train_scaled.shape[1],))
+                    # Build advanced meta-model architecture
+                    input_dim = meta_train_scaled.shape[1]
+                    inputs = tf.keras.Input(shape=(input_dim,))
+
+                    # Input normalization with Gaussian noise for robustness
                     x = BatchNormalization()(inputs)
-                    
-                    # First dense block with residual connection
-                    x1 = Dense(64, kernel_initializer='glorot_normal', 
-                            kernel_regularizer=l2(0.01))(x)
+                    x = GaussianNoise(0.01)(x)
+
+                    # First residual block
+                    x1 = Dense(128, kernel_initializer='he_normal',
+                               kernel_regularizer=l1_l2(l1=1e-5, l2=1e-4))(x)
                     x1 = BatchNormalization()(x1)
                     x1 = tf.keras.layers.LeakyReLU(alpha=0.1)(x1)
-                    x1 = Dropout(0.2)(x1)
-                    
-                    # Second dense block with residual connection
-                    x2 = Dense(32, kernel_initializer='glorot_normal',
-                            kernel_regularizer=l2(0.01))(x1)
+                    x1 = MCDropout(rate=0.15)(x1)  # MC Dropout for uncertainty
+
+                    # Second block
+                    x2 = Dense(64, kernel_initializer='he_normal',
+                               kernel_regularizer=l1_l2(l1=1e-5, l2=1e-4))(x1)
                     x2 = BatchNormalization()(x2)
                     x2 = tf.keras.layers.LeakyReLU(alpha=0.1)(x2)
-                    x2 = Dropout(0.2)(x2)
-                    
+                    x2 = MCDropout(rate=0.15)(x2)
+
+                    # Third block with residual from first
+                    x3 = Dense(64, kernel_initializer='he_normal',
+                               kernel_regularizer=l1_l2(l1=1e-5, l2=1e-4))(x2)
+                    x3 = BatchNormalization()(x3)
+
+                    # Skip connection from x1 (project to same dimension)
+                    x1_proj = Dense(64, kernel_initializer='he_normal')(x1)
+                    x3 = Add()([x3, x1_proj])
+                    x3 = tf.keras.layers.LeakyReLU(alpha=0.1)(x3)
+                    x3 = MCDropout(rate=0.1)(x3)
+
+                    # Fourth block
+                    x4 = Dense(32, kernel_initializer='he_normal',
+                               kernel_regularizer=l1_l2(l1=1e-5, l2=1e-4))(x3)
+                    x4 = BatchNormalization()(x4)
+                    x4 = tf.keras.layers.LeakyReLU(alpha=0.1)(x4)
+                    x4 = MCDropout(rate=0.1)(x4)
+
+                    # Final block before output
+                    x5 = Dense(16, kernel_initializer='he_normal',
+                               kernel_regularizer=l1_l2(l1=1e-5, l2=1e-4))(x4)
+                    x5 = BatchNormalization()(x5)
+                    x5 = tf.keras.layers.LeakyReLU(alpha=0.1)(x5)
+
                     # Output layer
                     outputs = Dense(1, kernel_initializer='glorot_normal',
-                                activation='linear')(x2)
-                    
+                                    activation='linear')(x5)
+
                     self.meta_model = tf.keras.Model(inputs=inputs, outputs=outputs)
+                    self.logger.info(f"Advanced meta-model built with {self.meta_model.count_params():,} parameters")
 
-                    # Custom loss function to handle NaN
-                    def safe_mse(y_true, y_pred):
-                        mask = tf.math.is_finite(y_true)
-                        y_true_safe = tf.where(mask, y_true, tf.zeros_like(y_true))
-                        y_pred_safe = tf.where(mask, y_pred, tf.zeros_like(y_pred))
-                        
-                        squared_error = tf.square(y_true_safe - y_pred_safe)
-                        loss = tf.reduce_mean(squared_error)
-                        return loss
-
-                    optimizer = Adam(
+                    # Use AdamW optimizer with weight decay
+                    optimizer = AdamW(
                         learning_rate=learning_rate,
+                        weight_decay=0.01,
                         clipnorm=1.0,
                         clipvalue=0.5,
                         epsilon=1e-7
                     )
 
+                    # Use combined loss for meta-model too
+                    loss_fn = CombinedLoss(
+                        huber_weight=0.5,
+                        mse_weight=0.3,
+                        direction_weight=0.2,
+                        delta=1.0
+                    )
+
                     self.meta_model.compile(
                         optimizer=optimizer,
-                        loss=SafeMSE(),
+                        loss=loss_fn,
                         metrics=[SafeMAE()]
                     )
 
@@ -424,15 +512,15 @@ class EnsembleModel:
                     callbacks = [
                         EarlyStopping(
                             monitor='val_loss' if meta_val is not None else 'loss',
-                            patience=5,
+                            patience=15,  # Increased patience for meta-model
                             restore_best_weights=True,
                             verbose=1
                         ),
                         ReduceLROnPlateau(
                             monitor='val_loss' if meta_val is not None else 'loss',
                             factor=0.5,
-                            patience=3,
-                            min_lr=1e-6,
+                            patience=5,
+                            min_lr=1e-7,
                             verbose=1
                         ),
                         ModelCheckpoint(
@@ -448,6 +536,7 @@ class EnsembleModel:
                         )
                     ]
 
+                    self.logger.info("Starting advanced meta-model training with CombinedLoss...")
                     history = self.meta_model.fit(
                         meta_train_scaled, y_train,
                         validation_data=(meta_val_scaled, y_val) if meta_val is not None else None,
@@ -476,11 +565,31 @@ class EnsembleModel:
         finally:
             clean_memory()
 
+    def _add_interaction_features(self, meta_features):
+        """Add interaction features between base model predictions."""
+        n_models = len(self.ensemble_models)
+        interaction_features = []
+
+        for i in range(n_models):
+            for j in range(i + 1, n_models):
+                # Difference between models
+                diff = meta_features[:, i] - meta_features[:, j]
+                interaction_features.append(tf.expand_dims(diff, -1))
+                # Ratio between models (with safety)
+                ratio = meta_features[:, i] / (tf.abs(meta_features[:, j]) + 1e-7)
+                interaction_features.append(tf.expand_dims(ratio, -1))
+
+        if interaction_features:
+            interaction_features = tf.concat(interaction_features, axis=-1)
+            return tf.concat([meta_features, interaction_features], axis=-1)
+        return meta_features
+
     def predict(self, dataset) -> Tuple[np.ndarray, np.ndarray]:
+        """Make predictions with the ensemble."""
         try:
             meta_features = []
             actual_targets = []
-            
+
             # Handle both dataset and direct feature input
             if isinstance(dataset, np.ndarray):
                 # Direct feature input
@@ -489,7 +598,7 @@ class EnsembleModel:
                     preds = model.predict(dataset)
                     batch_predictions.append(preds.flatten())
                 meta_features = np.array(batch_predictions).T
-                
+
             else:
                 # Dataset input
                 for data in dataset:
@@ -499,7 +608,7 @@ class EnsembleModel:
                         actual_targets.extend(y_batch.numpy())
                     else:
                         X_batch = data
-                    
+
                     batch_predictions = []
                     for model in self.ensemble_models:
                         preds = model.predict(X_batch)
@@ -513,27 +622,112 @@ class EnsembleModel:
                 raise ValueError("Meta-model is not trained.")
 
             # Replace NaN values
-            meta_features = tf.where(tf.math.is_finite(meta_features), 
-                                meta_features, tf.zeros_like(meta_features))
-                
+            meta_features = tf.where(tf.math.is_finite(meta_features),
+                                     meta_features, tf.zeros_like(meta_features))
+
+            # Add interaction features
+            meta_features_enhanced = self._add_interaction_features(meta_features)
+
             # Scale using saved parameters if available
             if self.meta_mean is not None and self.meta_std is not None:
-                meta_features_scaled = (meta_features - self.meta_mean) / (self.meta_std + 1e-7)
+                meta_features_scaled = (meta_features_enhanced - self.meta_mean) / (self.meta_std + 1e-7)
             else:
                 # If scaling parameters aren't available, just use the raw features
                 self.logger.warning("Meta scaling parameters not found, using unscaled features")
-                meta_features_scaled = meta_features
-                
+                meta_features_scaled = meta_features_enhanced
+
             predictions = self.meta_model.predict(meta_features_scaled)
-            
+
             if len(actual_targets) == 0:
                 actual_targets = np.zeros_like(predictions)  # Placeholder when no targets available
-                
+
             return predictions.flatten(), np.array(actual_targets)
         except Exception as e:
             self.logger.error(f"Error during ensemble prediction: {e}")
             self.logger.debug(traceback.format_exc())
             return np.array([], dtype=np.float32), np.array([], dtype=np.float32)
+
+    def predict_with_uncertainty(self, dataset, n_samples: int = 30) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Make predictions with uncertainty estimation using Monte Carlo Dropout.
+
+        Args:
+            dataset: Input data
+            n_samples: Number of forward passes for MC Dropout
+
+        Returns:
+            mean_predictions: Mean of predictions
+            std_predictions: Standard deviation (uncertainty)
+            actual_targets: True values
+        """
+        try:
+            meta_features = []
+            actual_targets = []
+
+            # Handle both dataset and direct feature input
+            if isinstance(dataset, np.ndarray):
+                batch_predictions = []
+                for model in self.ensemble_models:
+                    preds = model.predict(dataset)
+                    batch_predictions.append(preds.flatten())
+                meta_features = np.array(batch_predictions).T
+            else:
+                for data in dataset:
+                    if isinstance(data, tuple) and len(data) == 2:
+                        X_batch, y_batch = data
+                        actual_targets.extend(y_batch.numpy())
+                    else:
+                        X_batch = data
+
+                    batch_predictions = []
+                    for model in self.ensemble_models:
+                        preds = model.predict(X_batch)
+                        batch_predictions.append(preds.flatten())
+                    batch_meta_features = np.array(batch_predictions).T
+                    meta_features.append(batch_meta_features)
+
+                meta_features = np.vstack(meta_features)
+
+            if self.meta_model is None:
+                raise ValueError("Meta-model is not trained.")
+
+            # Replace NaN values
+            meta_features = tf.where(tf.math.is_finite(meta_features),
+                                     meta_features, tf.zeros_like(meta_features))
+
+            # Add interaction features
+            meta_features_enhanced = self._add_interaction_features(meta_features)
+
+            # Scale using saved parameters
+            if self.meta_mean is not None and self.meta_std is not None:
+                meta_features_scaled = (meta_features_enhanced - self.meta_mean) / (self.meta_std + 1e-7)
+            else:
+                meta_features_scaled = meta_features_enhanced
+
+            # Monte Carlo Dropout: Run multiple forward passes
+            all_predictions = []
+            for _ in range(n_samples):
+                # MC Dropout layers are active during prediction
+                preds = self.meta_model(meta_features_scaled, training=True)  # training=True enables dropout
+                all_predictions.append(preds.numpy().flatten())
+
+            all_predictions = np.array(all_predictions)
+
+            # Calculate mean and standard deviation
+            mean_predictions = np.mean(all_predictions, axis=0)
+            std_predictions = np.std(all_predictions, axis=0)
+
+            if len(actual_targets) == 0:
+                actual_targets = np.zeros_like(mean_predictions)
+
+            self.logger.info(f"Uncertainty estimation: mean std = {np.mean(std_predictions):.4f}")
+
+            return mean_predictions, std_predictions, np.array(actual_targets)
+
+        except Exception as e:
+            self.logger.error(f"Error during uncertainty prediction: {e}")
+            self.logger.debug(traceback.format_exc())
+            return np.array([]), np.array([]), np.array([])
 
     def evaluate_meta_model(self, dataset) -> Dict[str, float]:
         try:
