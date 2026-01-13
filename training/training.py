@@ -425,13 +425,13 @@ def main():
                         logger.info("Ensemble models saved successfully.")
 
                     except Exception as e:
-                        logger.error(f"[Ensemble Initialization] Error initializing EnsembleModel: {str(e)}")
+                        logger.error(f"[Backtesting/Saving] Error during backtesting or model saving: {str(e)}")
                         logger.debug(traceback.format_exc())
                 else:
                     logger.warning("Target MAE not reached. Training iterations exceeded maximum attempts.")
 
             except Exception as e:
-                logger.error(f"[Ensemble Initialization] Error initializing EnsembleModel: {e}")
+                logger.error(f"[Training Loop] Error during training loop: {e}")
                 logger.debug(traceback.format_exc())
                 sys.exit(1)
                 

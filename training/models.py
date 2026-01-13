@@ -502,11 +502,10 @@ class VerboseTrainingCallback(tf.keras.callbacks.Callback):
                 )
             
             self.logger.info(f"ETA: {eta}")
-            
-            # Memory tracking
+
+            # Memory tracking - gc.collect() only, don't clear session during training
             gc.collect()
-            tf.keras.backend.clear_session()
-            
+
             self.logger.info("-"*50)
             
             # Force flush of logging

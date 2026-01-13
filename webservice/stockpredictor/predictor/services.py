@@ -5,6 +5,7 @@ Stock prediction services with security-focused input validation and error handl
 import logging
 import os
 import re
+import sys
 import pandas as pd
 from datetime import datetime, timedelta
 from django.core.cache import cache
@@ -13,11 +14,8 @@ from django.conf import settings
 from typing import List, Dict, Optional, Tuple
 
 from .models import Stock, StockData, StockPrediction
-from .models import Stock, StockPrice, StockPrediction
 
-# Import from shared module
-import sys
-import os
+# Import from shared module - add parent directories to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 from shared.technical_analysis import TechnicalAnalysis
 from training.models import BaseModel, LSTMModel
@@ -229,8 +227,17 @@ class PredictionService:
                 logger.error("Model path outside allowed directory")
                 return None
 
+            import tensorflow as tf
             from training.ensemble import EnsembleModel
-            model = EnsembleModel.load_from_path(model_path)
+            from training.models import SafeMSE, SafeMAE
+
+            # Load the ensemble with custom objects
+            custom_objects = {
+                'SafeMSE': SafeMSE,
+                'SafeMAE': SafeMAE,
+            }
+            with tf.keras.utils.custom_object_scope(custom_objects):
+                model = tf.keras.models.load_model(model_path)
             logger.info("Successfully loaded prediction model")
             return model
 
