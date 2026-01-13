@@ -1,5 +1,7 @@
 # File: training.py
-
+"""
+Stock prediction model training with security-focused configuration and error handling.
+"""
 import os
 import sys
 import gc
@@ -22,6 +24,102 @@ from ensemble import EnsembleModel
 from backtester import Backtester
 from utils import setup_logger, load_configuration, load_and_process_individual_tfrecords_parallel, estimate_dataset_size, log_memory_usage, get_memory_usage, clean_memory, MemoryMonitor, monitor_memory
 
+# Security constants
+DEFAULT_CONFIG_PATH = "data/config.yaml"
+ALLOWED_CONFIG_DIRS = ["data", "/app/data", "/usr/src/app/data"]
+
+
+def validate_config_path(config_path: str) -> Tuple[bool, str]:
+    """
+    Validate configuration file path for security.
+
+    Args:
+        config_path: Path to configuration file
+
+    Returns:
+        Tuple of (is_valid, error_message or validated_path)
+    """
+    if not config_path:
+        return False, "Config path cannot be empty"
+
+    # Normalize the path
+    normalized = os.path.normpath(config_path)
+
+    # Check for path traversal attempts
+    if '..' in normalized:
+        return False, "Path traversal detected in config path"
+
+    # Verify file exists
+    if not os.path.exists(normalized):
+        return False, f"Config file not found: {normalized}"
+
+    # Verify file is within allowed directories
+    abs_path = os.path.abspath(normalized)
+    is_allowed = any(
+        abs_path.startswith(os.path.abspath(allowed_dir))
+        for allowed_dir in ALLOWED_CONFIG_DIRS
+    )
+
+    if not is_allowed:
+        return False, f"Config file must be in allowed directory: {ALLOWED_CONFIG_DIRS}"
+
+    return True, normalized
+
+
+def validate_config(config: dict, logger) -> bool:
+    """
+    Validate configuration values for security and correctness.
+
+    Args:
+        config: Configuration dictionary
+        logger: Logger instance
+
+    Returns:
+        True if configuration is valid
+    """
+    try:
+        # Validate training config
+        training_config = config.get('training', {})
+
+        # Validate sequence_length
+        seq_length = training_config.get('sequence_length', 60)
+        if not isinstance(seq_length, int) or seq_length < 1 or seq_length > 1000:
+            logger.error(f"Invalid sequence_length: {seq_length}. Must be 1-1000.")
+            return False
+
+        # Validate epochs
+        epochs = training_config.get('epochs', 30)
+        if not isinstance(epochs, int) or epochs < 1 or epochs > 1000:
+            logger.error(f"Invalid epochs: {epochs}. Must be 1-1000.")
+            return False
+
+        # Validate batch_size
+        batch_size = training_config.get('batch_size', 16)
+        if not isinstance(batch_size, int) or batch_size < 1 or batch_size > 10000:
+            logger.error(f"Invalid batch_size: {batch_size}. Must be 1-10000.")
+            return False
+
+        # Validate target_mae
+        target_mae = training_config.get('target_mae', 0.12)
+        if not isinstance(target_mae, (int, float)) or target_mae <= 0 or target_mae > 10:
+            logger.error(f"Invalid target_mae: {target_mae}. Must be 0-10.")
+            return False
+
+        # Validate stocks list
+        stocks = config.get('stocks', [])
+        if stocks:
+            for ticker in stocks:
+                if not isinstance(ticker, str) or len(ticker) > 15:
+                    logger.error(f"Invalid ticker in stocks list: {ticker}")
+                    return False
+
+        logger.info("Configuration validation passed")
+        return True
+
+    except Exception as e:
+        logger.error(f"Error validating configuration: {e}")
+        return False
+
 
 # Set GPU memory growth before any TensorFlow operations
 #gpus = tf.config.list_physical_devices('GPU')
@@ -38,9 +136,21 @@ from utils import setup_logger, load_configuration, load_and_process_individual_
 
 
 def main():
+    # Get config path from environment or use default
+    config_path = os.getenv('TRAINING_CONFIG_PATH', DEFAULT_CONFIG_PATH)
+
+    # Validate config path
+    is_valid, result = validate_config_path(config_path)
+    if not is_valid:
+        print(f"Configuration error: {result}")
+        sys.exit(1)
+    config_path = result
+
     # Load configuration
-    config_path = "data/config.yaml"
     config = load_configuration(config_path)
+    if not config:
+        print("Failed to load configuration")
+        sys.exit(1)
 
     # Setup logger with rotating file handler
     log_config = config.get('training_logging', {})
@@ -51,12 +161,21 @@ def main():
         environment=environment
     )
 
+    # Validate configuration
+    if not validate_config(config, logger):
+        logger.error("Configuration validation failed")
+        sys.exit(1)
+
     # Access training configuration
     training_config = config.get('training', {})
     models_config = config.get('models', [])
 
-    # Directory setup
+    # Directory setup with validation
     individual_tfrecord_path = "data/memory/individual_tfrecords"
+    # Ensure path is within data directory
+    if '..' in individual_tfrecord_path:
+        logger.error("Invalid path: path traversal detected")
+        sys.exit(1)
     os.makedirs(individual_tfrecord_path, exist_ok=True)
 
     try:
