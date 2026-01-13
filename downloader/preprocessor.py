@@ -85,6 +85,10 @@ class Preprocessor:
     def create_connection_pool(self, max_retries=3, retry_delay=5):
         for attempt in range(max_retries):
             try:
+                # Use SSL mode 'prefer' for better security in production
+                # Set to 'require' for strict SSL enforcement
+                ssl_mode = os.getenv('DB_SSLMODE', 'prefer')
+
                 self.connection_pool = pool.SimpleConnectionPool(
                     minconn=1,
                     maxconn=20,  # Adjust this number based on your needs
@@ -93,7 +97,9 @@ class Preprocessor:
                     user=self.db_user,
                     password=self.db_password,
                     dbname=self.db_name,
-                    sslmode='disable'
+                    sslmode=ssl_mode,
+                    connect_timeout=30,  # Connection timeout in seconds
+                    options='-c statement_timeout=120000'  # 2 minute statement timeout
                 )
                 self.logger.info("Database connection pool created successfully.")
                 return
@@ -115,7 +121,11 @@ class Preprocessor:
             self.logger.info("Database connection pool closed.")
     
     def compute_checksum(self, data: pd.DataFrame) -> str:
-        return hashlib.md5(pd.util.hash_pandas_object(data, index=True).values).hexdigest()
+        """
+        Compute a secure checksum for data integrity verification.
+        Uses SHA-256 for better security than MD5.
+        """
+        return hashlib.sha256(pd.util.hash_pandas_object(data, index=True).values).hexdigest()
 
     def load_processed_data(self, ticker: str, checksum: str) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         cache_file = os.path.join(self.cache_dir, f"{ticker}_{checksum}.h5")
