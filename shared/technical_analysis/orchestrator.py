@@ -15,7 +15,7 @@ from typing import Dict, Optional
 
 import pandas as pd
 import psycopg2
-from psycopg2 import extras
+from psycopg2 import extras, pool
 
 from ..constants import DatabaseConfig
 from ..exceptions import DatabaseError, TechnicalAnalysisError
@@ -34,16 +34,16 @@ class TechnicalAnalysis:
 
     def __init__(self, logger: Optional[logging.Logger] = None):
         self.logger = logger or logging.getLogger('training_logger')
-        self.db_connection = None
+        self.connection_pool = None
         self.cache = TechnicalAnalysisCache()
         self.indicators = TechnicalIndicators(self.logger)
         self.elliott_wave_analyzer = AdvancedElliottWaveAnalysis(self.logger)
         self.current_version = 1
 
-        self._setup_db_connection()
+        self._setup_connection_pool()
 
-    def _setup_db_connection(self) -> None:
-        """Setup database connection with credential validation."""
+    def _setup_connection_pool(self) -> None:
+        """Setup database connection pool with credential validation."""
         # Validate required environment variables
         db_host = os.getenv('DB_HOST')
         db_port = os.getenv('DB_PORT')
@@ -64,13 +64,15 @@ class TechnicalAnalysis:
             self.logger.error(
                 f"Missing required database environment variables: {', '.join(missing_vars)}"
             )
-            self.db_connection = None
+            self.connection_pool = None
             return
 
         try:
             # Use SSL mode from environment, defaulting to 'prefer'
             sslmode = os.getenv('DB_SSLMODE', 'prefer')
-            self.db_connection = psycopg2.connect(
+            self.connection_pool = pool.ThreadedConnectionPool(
+                minconn=1,
+                maxconn=10,
                 host=db_host,
                 port=db_port,
                 user=db_user,
@@ -79,17 +81,43 @@ class TechnicalAnalysis:
                 sslmode=sslmode
             )
             self._get_current_version()
+            self.logger.info("Database connection pool created successfully")
         except psycopg2.Error as e:
-            self.logger.error(f"Error connecting to database: {e}")
-            self.db_connection = None
+            self.logger.error(f"Error creating connection pool: {e}")
+            self.connection_pool = None
+
+    def get_connection(self):
+        """Get a connection from the pool."""
+        if self.connection_pool is None:
+            self._setup_connection_pool()
+        if self.connection_pool:
+            return self.connection_pool.getconn()
+        return None
+
+    def release_connection(self, conn):
+        """Return a connection to the pool."""
+        if self.connection_pool and conn:
+            self.connection_pool.putconn(conn)
+
+    @property
+    def db_connection(self):
+        """Backward compatibility: get a connection from pool."""
+        return self.get_connection()
+
+    def close(self):
+        """Close all connections in the pool."""
+        if self.connection_pool:
+            self.connection_pool.closeall()
+            self.logger.info("Database connection pool closed")
 
     def _get_current_version(self) -> int:
         """Get current version of technical indicators."""
-        if self.db_connection is None:
+        conn = self.get_connection()
+        if conn is None:
             return 1
 
         try:
-            with self.db_connection.cursor() as cursor:
+            with conn.cursor() as cursor:
                 cursor.execute("SELECT MAX(version) FROM technical_indicators;")
                 result = cursor.fetchone()
                 self.current_version = result[0] if result and result[0] else 1
@@ -97,6 +125,8 @@ class TechnicalAnalysis:
         except psycopg2.Error as e:
             self.logger.error(f"Error getting current version: {e}")
             return 1
+        finally:
+            self.release_connection(conn)
 
     def calculate_technical_indicators(self, data: pd.DataFrame, ticker: str) -> pd.DataFrame:
         """
@@ -158,7 +188,8 @@ class TechnicalAnalysis:
 
     def store_technical_indicators(self, data: pd.DataFrame, ticker: str, config: Dict) -> bool:
         """Store calculated technical indicators with versioning."""
-        if self.db_connection is None:
+        conn = self.get_connection()
+        if conn is None:
             self.logger.error("No database connection available")
             return False
 
@@ -170,7 +201,7 @@ class TechnicalAnalysis:
                 self.current_version += 1
                 self.cache.config_hash = config_hash
 
-            with self.db_connection.cursor() as cursor:
+            with conn.cursor() as cursor:
                 # Store configuration
                 cursor.execute("""
                     INSERT INTO indicator_configs (version, config_hash, config)
@@ -178,35 +209,48 @@ class TechnicalAnalysis:
                     ON CONFLICT (version) DO NOTHING;
                 """, (self.current_version, config_hash, json.dumps(config)))
 
-                # Prepare data for batch insertion
-                records = []
+                # Prepare data for batch insertion using vectorized approach
                 metadata = {
                     'config_hash': config_hash,
                     'calculation_parameters': config
                 }
+                metadata_json = json.dumps(metadata)
 
-                for index, row in data.iterrows():
-                    record = (
+                # Define columns for extraction
+                indicator_columns = [
+                    'EMA_12', 'EMA_26', 'MACD', 'MACD_Signal', 'MACD_Histogram',
+                    'RSI', 'BB_Upper', 'BB_Middle', 'BB_Lower', 'CCI', 'ATR',
+                    'SuperTrend', 'SuperTrend_Direction', 'ZigZag', 'ZigZag_Highs', 'ZigZag_Lows',
+                    'Support', 'Resistance', 'Elliott_Wave', 'Wave_Degree', 'Wave_Type',
+                    'Wave_Number', 'Wave_Confidence'
+                ]
+
+                # Use itertuples() which is ~100x faster than iterrows()
+                records = [
+                    (
                         ticker,
-                        index,
+                        row.Index,
                         self.current_version,
-                        *self._prepare_record(row),
-                        json.dumps(metadata)
+                        *[getattr(row, col, None) if col in data.columns else None for col in indicator_columns],
+                        metadata_json
                     )
-                    records.append(record)
+                    for row in data.itertuples()
+                ]
 
                 # Use efficient batch insertion
                 extras.execute_batch(cursor, self._get_insert_sql(), records)
 
-                self.db_connection.commit()
+                conn.commit()
                 self.logger.info(f"Stored technical indicators for {ticker} (version {self.current_version})")
                 return True
 
         except psycopg2.Error as e:
             self.logger.error(f"Error storing technical indicators for {ticker}: {e}")
-            if self.db_connection:
-                self.db_connection.rollback()
+            if conn:
+                conn.rollback()
             return False
+        finally:
+            self.release_connection(conn)
 
     def load_technical_indicators(
         self,
@@ -216,7 +260,8 @@ class TechnicalAnalysis:
         version: Optional[int] = None
     ) -> pd.DataFrame:
         """Load technical indicators with caching."""
-        if self.db_connection is None:
+        conn = self.get_connection()
+        if conn is None:
             self.logger.error("No database connection available")
             return pd.DataFrame()
 
@@ -227,6 +272,7 @@ class TechnicalAnalysis:
             # Check cache first
             cached_data = self.cache.get_cached_data(ticker, date_range, str(version))
             if cached_data is not None:
+                self.release_connection(conn)
                 return cached_data
 
             # Load from database
@@ -240,7 +286,7 @@ class TechnicalAnalysis:
 
             data = pd.read_sql_query(
                 query,
-                self.db_connection,
+                conn,
                 params=(ticker, start_date, end_date, version),
                 index_col='date',
                 parse_dates=['date']
@@ -254,15 +300,18 @@ class TechnicalAnalysis:
         except psycopg2.Error as e:
             self.logger.error(f"Error loading technical indicators for {ticker}: {e}")
             return pd.DataFrame()
+        finally:
+            self.release_connection(conn)
 
     def cleanup_old_versions(self, keep_versions: int = 3) -> None:
         """Cleanup old indicator versions."""
-        if self.db_connection is None:
+        conn = self.get_connection()
+        if conn is None:
             self.logger.error("No database connection available")
             return
 
         try:
-            with self.db_connection.cursor() as cursor:
+            with conn.cursor() as cursor:
                 cursor.execute("""
                     DELETE FROM technical_indicators
                     WHERE version < (
@@ -271,13 +320,15 @@ class TechnicalAnalysis:
                     );
                 """, (keep_versions,))
 
-                self.db_connection.commit()
+                conn.commit()
                 self.logger.info(f"Cleaned up old versions, keeping last {keep_versions} versions")
 
         except psycopg2.Error as e:
             self.logger.error(f"Error cleaning up old versions: {e}")
-            if self.db_connection:
-                self.db_connection.rollback()
+            if conn:
+                conn.rollback()
+        finally:
+            self.release_connection(conn)
 
     def _prepare_record(self, row: pd.Series) -> tuple:
         """Prepare a row for database insertion."""
